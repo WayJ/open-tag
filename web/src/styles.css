@@ -578,6 +578,8 @@ aside.traj-col h2{position:relative;font-size:12px;font-weight:600;letter-spacin
 .att-preview-bg{position:fixed;inset:0;z-index:200;background:var(--scrim);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;overflow:hidden;padding:32px}
 .att-preview-panel{display:flex;flex-direction:column;width:min(92vw,1120px);height:calc(100vh - 64px);background:var(--surface);border:1px solid var(--hair-strong);border-radius:12px;box-shadow:0 12px 48px var(--shadow-7);overflow:hidden}
 .att-preview-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--hair);flex-shrink:0}
+.att-preview-bar .im{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid var(--hair-strong);border-radius:8px;background:var(--surface);color:var(--muted);cursor:pointer;text-decoration:none}
+.att-preview-bar .im:hover{color:var(--ink);background:var(--surface-strong)}
 .att-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
 .att-preview-frame{flex:1;width:100%;border:none;background:#fff}
 .att-preview-err{flex:1;display:flex;align-items:center;justify-content:center;color:var(--ink-2);font-size:14px}

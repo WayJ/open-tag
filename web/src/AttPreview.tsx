@@ -33,6 +33,8 @@ export function AttPreview({ url, filename, onClose }: { url: string; filename: 
         </div>
         {err
           ? <div className="att-preview-err">{i18n.t("chat.previewError")}</div>
+          // Note: iframe error events rarely fire (load failures still fire `load`); the mime gate in
+          // Chat.tsx (`isHtmlDoc` on stored metadata) is the real guard against broken previews.
           : <iframe className="att-preview-frame" src={url} sandbox="" title={filename} onError={() => setErr(true)} />}
       </div>
     </div>,
