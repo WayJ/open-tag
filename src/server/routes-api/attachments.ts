@@ -15,7 +15,7 @@ import { bearer, isUuid, sendErr, sendJson } from "../util.js";
  * navigated to directly — browsers parse them as media, not as documents.
  *
  * Intentional exclusions:
- *   - text/html, application/xhtml+xml → HTML execution.
+ *   - text/html, application/xhtml+xml → handled separately in SANDBOXED_INLINE_TYPES (Tier 4 sandboxed inline).
  *   - image/svg+xml → handled separately in SAFE_INLINE_WITH_CSP_TYPES.
  *   - text/javascript, application/javascript → direct execution.
  *   - text/xml, application/xml → XSLT may load external resources.

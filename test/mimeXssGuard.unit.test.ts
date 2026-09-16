@@ -78,6 +78,10 @@ test("safeDownloadHeaders: text/html → inline + CSP sandbox (Tier 4, sandboxed
     "inline styles must render for visual fidelity");
   assert.match(h["content-security-policy"]!, /img-src data:/,
     "embedded base64 images must render");
+  // Exact pin: the tripwire against a silent relaxation (e.g. `sandbox allow-scripts
+  // allow-same-origin` or `img-src data: https:`) that would still satisfy the matches above.
+  assert.equal(h["content-security-policy"],
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
   assert.equal(h["referrer-policy"], "no-referrer",
     "token lives in the query string — never leak it as a referrer");
   assert.equal(h["x-content-type-options"], "nosniff");
@@ -101,6 +105,8 @@ test("safeDownloadHeaders: application/xhtml+xml → inline + CSP sandbox (Tier 
   assert.match(h["content-disposition"], /^inline;/);
   assert.match(h["content-security-policy"]!, /\bsandbox\b/);
   assert.match(h["content-security-policy"]!, /default-src 'none'/);
+  assert.equal(h["content-security-policy"],
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
   assert.equal(h["referrer-policy"], "no-referrer");
 });
 
