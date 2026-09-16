@@ -500,6 +500,7 @@
     "retryLoad": "Retry",
     "jumpToMessage": "Jump to original message",
     "download": "Download",
+    "previewError": "Preview failed — download instead",
     "asTask": "As Task",
     "agentKind": "agent",
     "userKind": "user",
