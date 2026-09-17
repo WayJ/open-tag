@@ -14,7 +14,7 @@ import { readProcessMemoryMB, applyMemoryPressure } from "./resourceLimit.js";
 import { DeliveryAdmissionStore } from "./deliveryAdmissionStore.js";
 import { resolveProjectDirectory } from "./projectDirectory.js";
 import { atomicWriteManagedFile, ensureManagedDirectory, readManagedFile, readManagedMemoryFiles } from "./stateFiles.js";
-import { memoryFilesDigest } from "../daemonProtocol.js";
+import { decideMemoryRestore, memoryFilesDigest, validateMemoryFiles } from "../daemonProtocol.js";
 
 const DATA_DIR = agentsDir();
 const IDLE_MS = Number(process.env.OPEN_TAG_IDLE_MS ?? 10 * 60 * 1000); // how long before idle sleep (kills process to save memory; next wake uses --resume)
@@ -37,6 +37,9 @@ export interface AgentConfig {
   name: string; displayName: string; description?: string | null;
   model?: string; runtime?: string; projectPath?: string | null; runtimeConfig?: Record<string, unknown> | null; sessionId?: string;
   scope?: AgentScope; // injected by the server on agent:start; absent → LEGACY single-session behavior
+  // Server row's managed-memory digest from agentConfig (absent = no row). Only the digest rides
+  // the config; the full snapshot is pulled on demand via the memory:get RPC (fetchMemory).
+  memoryDigest?: string;
   serverUrl: string; serverId: string; agentId: string; agentToken?: string; // per-agent token (slice10); re-sent start for a running agent may omit it (daemon ignores)
 }
 interface DeliveryAdmission { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; }
@@ -62,6 +65,10 @@ interface AgentManagerOptions {
   beforeRuntimeDelivery?: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   machineId?: string; // stable machine identity, uplinked with each memory snapshot (wire symmetry; the server uses the connection identity)
   memoryUploadDebounceMs?: number;
+  // Daemon-initiated managed-memory fetch ("memory:get" RPC → "memory:data" waiter, wired in
+  // index.ts). Resolves the server snapshot, or undefined on timeout / no row — the restore then
+  // behaves exactly as "no server row". Undefined option → restore never pulls (skip-only).
+  fetchMemory?: (agentId: string) => Promise<Record<string, string> | undefined>;
 }
 
 export class AgentManager {
@@ -94,6 +101,7 @@ export class AgentManager {
   private beforeRuntimeDelivery: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   private machineId?: string;
   private memoryUploadDebounceMs: number;
+  private fetchMemory: (agentId: string) => Promise<Record<string, string> | undefined>;
   private budget: ResourceBudget;
   private startQueue: QueuedStart[] = [];
   private log = createLogger("daemon:agents");
@@ -110,6 +118,7 @@ export class AgentManager {
     this.beforeRuntimeDelivery = opts.beforeRuntimeDelivery ?? (async () => {});
     this.machineId = opts.machineId;
     this.memoryUploadDebounceMs = opts.memoryUploadDebounceMs ?? MEMORY_UPLOAD_DEBOUNCE_MS;
+    this.fetchMemory = opts.fetchMemory ?? (async () => undefined);
     // Memory pressure monitor: every 10s, cap running agents if free < 500 MB
     const pressureTimer = setInterval(() => this.checkMemoryPressure(), 10_000);
     pressureTimer.unref?.();
@@ -378,8 +387,99 @@ export class AgentManager {
     const files = await readManagedMemoryFiles(path.join(this.dataDir, agentId));
     const digest = memoryFilesDigest(files);
     if (this.memoryUploadCache.get(agentId) === digest) return; // unchanged since the last upload
-    this.memoryUploadCache.set(agentId, digest);
+    // Pre-flight the shared whitelist/size validation: an invalid snapshot is dropped here (logged,
+    // nothing sent, cache untouched so a fixed next turn retries) instead of being silently
+    // discarded server-side by the uplink guard.
+    const verdict = validateMemoryFiles(files);
+    if (!verdict.ok) {
+      this.log.warn("memory upload dropped: invalid snapshot", { agentId, reason: verdict.reason });
+      return;
+    }
     this.send({ type: "agent:memory", agentId, files, machineId: this.machineId });
+    this.memoryUploadCache.set(agentId, digest);
+  }
+
+  /** Drop the in-memory upload digest cache. Called when the WS connection is (re)established: a
+   *  snapshot uploaded just before a drop may never have landed, so the next turn end re-reads and
+   *  re-uploads — the server's upsert is idempotent, so the redundant send is harmless. */
+  clearMemoryUploadCache(): void {
+    this.memoryUploadCache.clear();
+  }
+
+  /** Three-state managed-memory restore, evaluated on every start BEFORE the seed's ENOENT check —
+   *  a restored MEMORY.md makes the seed a natural no-op. Decision = decideMemoryRestore over the
+   *  local whitelist snapshot vs config.memoryDigest (the server row's digest; absent → no row):
+   *  skip (no row / empty row / in-sync), restore-in-place (empty local — the normal migration
+   *  path), or import (diverged local → one-shot notes/imported/<stamp>.md copy + an index line
+   *  appended to MEMORY.md; the agent merges on its next turn). Fully guarded: any failure logs
+   *  and degrades to the pre-sync local behavior — restore must never block startup. */
+  private async restoreManagedMemory(agentId: string, stateDir: string, config: AgentConfig): Promise<void> {
+    try {
+      const localFiles = await readManagedMemoryFiles(stateDir);
+      const decision = decideMemoryRestore(localFiles, config.memoryDigest);
+      if (decision.action === "skip") {
+        // Restore-time digest seeding: an in-sync snapshot must not be re-uploaded by the first
+        // turn end (the cache exists purely to save traffic; losing it is always safe).
+        if (decision.reason === "in-sync" && config.memoryDigest) this.memoryUploadCache.set(agentId, config.memoryDigest);
+        return;
+      }
+      const files = await this.fetchMemory(agentId);
+      if (!files || Object.keys(files).length === 0) {
+        // Empty answer (row vanished between config and fetch) or an abandoned fetch (index.ts
+        // resolves undefined after MEMORY_GET_TIMEOUT_MS) → behave exactly as "no server row".
+        this.log.warn("memory restore abandoned: no snapshot data", { agentId });
+        return;
+      }
+      if (decision.then === "restoreInPlace") {
+        // Empty local workspace → write the server files in place, MEMORY.md last so its presence
+        // implies the rest. Sibling-scope cold-start races reuse the seed's EPERM/EEXIST tolerance:
+        // the rename loser's target already holds identical content.
+        const ordered = Object.entries(files).sort(([a], [b]) => (a === "MEMORY.md" ? 1 : 0) - (b === "MEMORY.md" ? 1 : 0));
+        for (const [rel, content] of ordered) {
+          try { await atomicWriteManagedFile(stateDir, rel, content); }
+          catch (e: any) { if (e?.code !== "EPERM" && e?.code !== "EEXIST") throw e; }
+        }
+        this.memoryUploadCache.set(agentId, memoryFilesDigest(files));
+        this.log.info("memory restored in place", { agentId, files: ordered.length });
+        return;
+      }
+      await this.importServerMemory(agentId, stateDir, files);
+    } catch (cause) {
+      this.log.warn("memory restore failed — continuing with local state", { agentId, detail: String(cause instanceof Error ? cause.message : cause) });
+    }
+  }
+
+  /** State-3 import: the server snapshot goes to `notes/imported/<yyyymmddTHHMMSSZ>.md` (stamp is
+   *  colon-free → NTFS-safe; the directory is deliberately OUTSIDE the whitelist so the import is
+   *  never re-uploaded — the agent merges it back through MEMORY.md/notes and the next snapshot
+   *  carries the merged result), plus one index line appended to MEMORY.md. Local whitelist files
+   *  are never overwritten. Same-second sibling imports land on the same name with identical
+   *  content, so rename races are tolerated (a double import — two stamps or two index lines — is
+   *  accepted as harmless). */
+  private async importServerMemory(agentId: string, stateDir: string, files: Record<string, string>): Promise<void> {
+    const stamp = new Date().toISOString().replace(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).*$/, "$1$2$3T$4$5$6Z");
+    const importPath = `notes/imported/${stamp}.md`;
+    const sections = Object.entries(files)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([rel, content]) => `## ${rel}\n\n${content}\n`);
+    const importDoc = `# Imported server memory (${stamp})\n\n${sections.join("\n")}`;
+    try { await atomicWriteManagedFile(stateDir, importPath, importDoc); }
+    catch (e: any) { if (e?.code !== "EPERM" && e?.code !== "EEXIST") throw e; }
+
+    const indexLine = `- Imported server memory snapshot: ${importPath}\n`;
+    let memory: string | null = null;
+    try { memory = (await readManagedFile(stateDir, "MEMORY.md")).toString("utf8"); }
+    catch (e: any) { if (e?.code !== "ENOENT") throw e; }
+    // Diverged whitelist without a MEMORY.md (local content lives only in notes/): create a minimal
+    // MEMORY.md holding just the index line so the agent still sees the pointer.
+    const next = memory === null ? indexLine : memory + (memory.endsWith("\n") ? "" : "\n") + indexLine;
+    try { await atomicWriteManagedFile(stateDir, "MEMORY.md", next); }
+    catch (e: any) {
+      // A sibling scope appended concurrently and won the rename; the worst case is two index
+      // lines — never a lost local byte. Tolerated.
+      if (e?.code !== "EPERM" && e?.code !== "EEXIST") throw e;
+    }
+    this.log.info("diverged server memory imported", { agentId, importPath });
   }
 
   private startReplyPreview(key: string, r: Running, channelId: string, streamId?: string): void {
@@ -486,6 +586,10 @@ export class AgentManager {
     await mkdir(this.dataDir, { recursive: true });
     await ensureManagedDirectory(this.dataDir, agentId);
     await ensureManagedDirectory(stateDir, "notes");
+    this.assertStartActive(key, attempt);
+    // Managed-memory three-state restore BEFORE the seed's ENOENT check: a restored MEMORY.md
+    // makes the seed a no-op (restore precedes seed). Best-effort — never blocks startup.
+    await this.restoreManagedMemory(agentId, stateDir, config);
     this.assertStartActive(key, attempt);
     try { await readManagedFile(stateDir, "MEMORY.md"); } catch (error: any) {
       const replaceUnsafeLink = error instanceof Error && error.message.includes("file is a symbolic link");
