@@ -8,6 +8,7 @@ import "../src/env.ts";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "../src/db/index.ts";
 import { agentConfig, resolveScope, type AgentScope } from "../src/server/agentConfig.ts";
+import { handleAgentSessionUplink } from "../src/server/ws.ts";
 import { createServer } from "../src/server/core.ts";
 import { dispatchLegacyMessage, type ConversationTurnDispatchDeps, type DispatchMember } from "../src/server/conversationTurnDispatch.ts";
 
@@ -163,6 +164,31 @@ async function main() {
   check("no ctx → top-level sessionId key still present", !!plainCfg && "sessionId" in plainCfg);
   const legacyAfterScoped = await agentConfig(agentId);
   check("agent_sessions row does not leak into the ctx-less config", legacyAfterScoped?.scope === undefined);
+
+  console.log("\n[7] ws agent:session uplink with scope → agent_sessions upsert (create then update)");
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-up-1", scope: { type: "thread", id: threadChannelId } });
+  let rows = await db.select().from(schema.agentSessions).where(and(eq(schema.agentSessions.agentId, agentId), eq(schema.agentSessions.scopeType, "thread"), eq(schema.agentSessions.scopeId, threadChannelId)));
+  check("scoped uplink creates the agent_sessions row", rows.length === 1 && rows[0]!.sessionId === "sess-up-1");
+  check("scoped uplink does not write the legacy agents.session_id column", (await db.select({ sessionId: schema.agents.sessionId }).from(schema.agents).where(eq(schema.agents.id, agentId)))[0]!.sessionId === null);
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-up-2", scope: { type: "thread", id: threadChannelId } });
+  rows = await db.select().from(schema.agentSessions).where(and(eq(schema.agentSessions.agentId, agentId), eq(schema.agentSessions.scopeType, "thread"), eq(schema.agentSessions.scopeId, threadChannelId)));
+  check("second uplink same scope updates sessionId in place (still one row)", rows.length === 1 && rows[0]!.sessionId === "sess-up-2");
+
+  console.log("\n[8] same agent, two scopes → two rows that do not overwrite each other");
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-chan", scope: { type: "channel", id: channelId } });
+  const both = await db.select().from(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId));
+  check("two rows, one per (scopeType, scopeId)", both.length === 2);
+  check("thread row keeps its own sessionId", both.some((r) => r.scopeType === "thread" && r.scopeId === threadChannelId && r.sessionId === "sess-up-2"));
+  check("channel row keeps its own sessionId", both.some((r) => r.scopeType === "channel" && r.scopeId === channelId && r.sessionId === "sess-chan"));
+
+  console.log("\n[9] ws agent:session uplink without scope → legacy agents.session_id column (old-daemon compat)");
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-legacy" });
+  check("scope-less uplink writes agents.session_id", (await db.select({ sessionId: schema.agents.sessionId }).from(schema.agents).where(eq(schema.agents.id, agentId)))[0]!.sessionId === "sess-legacy");
+  const noScopeRows = await db.select().from(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId));
+  check("scope-less uplink does not touch agent_sessions", noScopeRows.length === 2);
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-ignored", scope: { type: "dm", id: dmChannelId } });
+  const invalidRows = await db.select().from(schema.agentSessions).where(and(eq(schema.agentSessions.agentId, agentId), eq(schema.agentSessions.scopeType, "dm")));
+  check("invalid scope type falls back to the legacy column (no agent_sessions row)", invalidRows.length === 0 && (await db.select({ sessionId: schema.agents.sessionId }).from(schema.agents).where(eq(schema.agents.id, agentId)))[0]!.sessionId === "sess-ignored");
 }
 
 main()
