@@ -72,9 +72,26 @@ Wire additions:
   delivery, restore wiring) — all pass.
 - **Old suites: zero modifications required** (LEGACY/no-sync behavior preserved; restore is a
   guarded prefix of start).
-- **E2E (real claude runtime, controller run)**: upload/restore closed loop — *(pending: filled in
-  by the controller's live isolated-stack run; if the run diverges, this section and the FEATURES.md
-  "verified" note get corrected).*
+- **E2E (real claude runtime, controller run on the isolated worktree stack)**:
+  - **Upload — verified**: after a real agent turn ended, an `agent_memory` row existed with the
+    whitelisted files and `uploadedByMachineId` set.
+  - **State 1 (in-place restore) — verified**: wiped the agent `stateDir`, restarted: the restored
+    file was byte-identical to the server snapshot.
+  - **State 3 (divergent → import) — verified, plus the full convergence loop**: restart after a
+    fork produced `notes/imported/20260917T172149Z.md` (colon-free stamp) and appended the MEMORY.md
+    index line (`:13`, original content preserved); the agent then merged it and its turn-end upload
+    overwrote the forked server row — the server snapshot converged back to the local content.
+  - **State 2 (in-sync skip) — verified implicitly**: multiple restarts with unchanged memory
+    performed zero imports (the digest-equality skip held across the live loop).
+  - **Reset — covered by unit tests** (`reset(clearMemory)` cancels the pending upload and drops the
+    digest cache; the next turn end re-uploads); not re-run live in this e2e window.
+  - e2e-infra footnote (pre-existing, NOT this branch): the isolated-stack harness
+    `scripts/dev-e2e-up.sh` (a) never `export`s the `OPEN_TAG_HOME` it parses from `.env` — the
+    daemon resolves its own data dir and can land on `~/.open-tag` unless the caller's shell leaks
+    the env, and (b) `scripts/dev-e2e-down.sh`'s pidfile kill only reaches the `npx` wrapper,
+    leaking one zombie daemon per up/down cycle — zombies share a machineId and ping-pong the WS
+    with 1005 flaps. Both tracked in `docs/tech-debt-tracker.md` (2026-09-18 section); the scripts
+    were last touched in e1bf7cc, before this branch.
 - `npm run typecheck` clean (root + web).
 
 ## Release note (merged ≠ shipped)
@@ -93,7 +110,8 @@ compatible in the reverse direction.
 - `ARCHITECTURE.md`: protocol extension (memory uplink + first daemon-initiated RPC), `ws.ts`
   memory handlers, `agentManager` debounce/restore, `agentConfig` digest-only select, data-model
   `agent_memory`.
-- `FEATURES.md`: checked feature bullet (verified: upload/restore closed loop e2e).
+- `FEATURES.md`: checked feature bullet (verified e2e: upload / state1 in-place restore / state3
+  import + convergence loop / state2 in-sync skip implicit; reset covered by unit tests).
 - `docs/tech-debt-tracker.md`: MEMORY.md concurrent-write race entry annotated (narrowed, v2
   direction unchanged) + new minor (state-3 import replay window, accepted).
 - `docs/generated/db-schema.md`: `agent_memory` table (from the schema commit).
