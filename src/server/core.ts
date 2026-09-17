@@ -11,7 +11,7 @@ import { UUID_RE } from "./util.js";
 import { ensureReplyRecipients, releaseUnavailableReplyGrant } from "./replyCoordination.js";
 import type { ReplySlot } from "./replyCoordinationPolicy.js";
 import { assignActivityRows, claimPendingAgentActivity, pendingActivityForStream, type AgentActivityItem } from "./agentActivity.js";
-import { agentConfig } from "./agentConfig.js";
+import { agentConfig, type ScopeContext } from "./agentConfig.js";
 import { attachMessageToConversationTurn, scheduleConversationTurn, type ConversationBoundaryKind } from "./conversationTurns.js";
 import { dispatchConversationTurn as dispatchConversationTurnWithDeps, dispatchLegacyMessage, prepareConversationTurnResponsibility, type ConversationTurnDispatchDeps } from "./conversationTurnDispatch.js";
 import { AGENT_CONTROL_ACK_CAPABILITY, DELIVERY_ADMISSION_CAPABILITY, PROJECT_DIRECTORY_CAPABILITY } from "../daemonProtocol.js";
@@ -940,7 +940,7 @@ export async function assignTask(
   const sysMsg = await sysTaskMsg(serverId, threadCh, `${actor} assigned #${upd.taskNumber} "${taskTitle(upd.content)}" to ${assigneeName}`, by);
   await ensureReplyRecipients({ serverId, channelId: threadCh, messageId: sysMsg.id, recipients: [{ agentId: assigneeId, attention: "assigned" }] });
 
-  const startTarget = await agentStartTarget(serverId, assigneeId);
+  const startTarget = await agentStartTarget(serverId, assigneeId, { channelId: threadCh });
   if (startTarget.ok) {
     const startSent = sendAgentStart(serverId, startTarget, assigneeId);
     const deliverSent = startSent && sendAgentDeliver(serverId, startTarget, {
@@ -951,6 +951,7 @@ export async function assignTask(
       targetName: `task #${upd.taskNumber}`,
       msgShort: sysMsg.id.slice(0, 8),
       isTask: true,
+      scope: startTarget.cfg.scope,
       message: { content: `#${upd.taskNumber} assigned to you` },
       mentioned: true,
     });
@@ -996,11 +997,11 @@ export async function setTaskStatus(serverId: string, messageId: string, status:
   // Wake the assigned agent (only when changed by someone else). Verified: human changes status → assignee agent fires agent:activity working detail="Message received".
   if (upd.taskAssigneeType === "agent" && upd.taskAssigneeId && by?.id !== upd.taskAssigneeId && assigneeAcceptsSource) {
     await db.insert(schema.channelMembers).values({ channelId: threadCh, memberType: "agent", memberId: upd.taskAssigneeId }).onConflictDoNothing(); // ensure assignee is a thread member, otherwise message check cannot see this system message
-    const target = await agentStartTarget(serverId, upd.taskAssigneeId);
+    const target = await agentStartTarget(serverId, upd.taskAssigneeId, { channelId: threadCh });
     await ensureReplyRecipients({ serverId, channelId: threadCh, messageId: sysMsg.id, recipients: [{ agentId: upd.taskAssigneeId, attention: "assigned" }] });
     if (target.ok) {
       const startSent = sendAgentStart(serverId, target, upd.taskAssigneeId);
-      const deliverSent = startSent && sendAgentDeliver(serverId, target, { type: "agent:deliver", agentId: upd.taskAssigneeId, seq: sysMsg.seq, from: actor, target: threadCh, targetName: `task #${upd.taskNumber}`, msgShort: sysMsg.id.slice(0, 8), isTask: true, message: { content: `#${upd.taskNumber} → ${label}` }, mentioned: true });
+      const deliverSent = startSent && sendAgentDeliver(serverId, target, { type: "agent:deliver", agentId: upd.taskAssigneeId, seq: sysMsg.seq, from: actor, target: threadCh, targetName: `task #${upd.taskNumber}`, msgShort: sysMsg.id.slice(0, 8), isTask: true, scope: target.cfg.scope, message: { content: `#${upd.taskNumber} → ${label}` }, mentioned: true });
       if (!deliverSent) { await releaseUnavailableReplyGrant(sysMsg.id, upd.taskAssigneeId); await markAgentUnavailable(serverId, upd.taskAssigneeId, "machine offline"); }
     } else if (target.reason !== "agent not found") {
       await releaseUnavailableReplyGrant(sysMsg.id, upd.taskAssigneeId);
@@ -1064,12 +1065,13 @@ export async function wakeAgentForReplyCoordination(serverId: string, agentId: s
   const trigger = (await db.select().from(schema.messages).where(and(eq(schema.messages.id, messageId), eq(schema.messages.serverId, serverId))))[0];
   if (!trigger) return false;
   const ch = (await db.select().from(schema.channels).where(eq(schema.channels.id, trigger.channelId)))[0];
-  const target = await agentStartTarget(serverId, agentId);
+  const target = await agentStartTarget(serverId, agentId, { channelId: trigger.channelId });
   if (!target.ok) { await releaseUnavailableReplyGrant(messageId, agentId); return false; }
   const started = sendAgentStart(serverId, target, agentId);
   const delivered = started && sendAgentDeliver(serverId, target, {
     agentId, seq: trigger.seq, from, target: trigger.channelId,
     targetName: `coordination:${ch?.name ?? trigger.channelId}`, msgShort: trigger.id.slice(0, 8),
+    scope: target.cfg.scope,
     mentioned: true, message: { content: "reply coordination update" },
   });
   if (!delivered) await releaseUnavailableReplyGrant(messageId, agentId);
@@ -1082,7 +1084,9 @@ export async function wakeAgentForLifecycleNotice(
   agentId: string,
   notice: { channelId: string; channelName: string; seq: number },
 ): Promise<boolean> {
-  const target = await agentStartTarget(serverId, agentId);
+  // Deleted-channel notice: agentConfig finds no live channel row → no scope (LEGACY config); when the
+  // channel row is still resolvable the deliver carries the same scope as the start config.
+  const target = await agentStartTarget(serverId, agentId, { channelId: notice.channelId });
   if (!target.ok) return false;
   const started = sendAgentStart(serverId, target, agentId);
   const delivered = started && sendAgentDeliver(serverId, target, {
@@ -1091,6 +1095,7 @@ export async function wakeAgentForLifecycleNotice(
     from: "system",
     target: notice.channelId,
     targetName: `#${notice.channelName} (deleted)`,
+    scope: target.cfg.scope,
     attention: "lifecycle",
   });
   if (!delivered) await markAgentUnavailable(serverId, agentId, "machine offline");
@@ -1154,7 +1159,7 @@ async function agentStartPreflight(serverId: string, agentId: string): Promise<A
   return { ok: true, machineId: a.machineId, projectPath: a.projectPath, status: a.status };
 }
 
-async function agentStartTarget(serverId: string, agentId: string): Promise<AgentStartTarget | { ok: false; reason: string }> {
+async function agentStartTarget(serverId: string, agentId: string, scopeCtx?: ScopeContext): Promise<AgentStartTarget | { ok: false; reason: string }> {
   const preflight = await agentStartPreflight(serverId, agentId);
   if (!preflight.ok) return preflight;
   // Claim the configuration before reading it. A project-path PATCH requires status=inactive in the
@@ -1164,9 +1169,9 @@ async function agentStartTarget(serverId: string, agentId: string): Promise<Agen
     const [claimed] = await db.update(schema.agents).set({ status: "starting" })
       .where(and(eq(schema.agents.id, agentId), eq(schema.agents.serverId, serverId), eq(schema.agents.status, preflight.status)))
       .returning({ id: schema.agents.id });
-    if (!claimed) return agentStartTarget(serverId, agentId);
+    if (!claimed) return agentStartTarget(serverId, agentId, scopeCtx);
   }
-  const cfg = await agentConfig(agentId);
+  const cfg = await agentConfig(agentId, scopeCtx);
   if (!cfg) return { ok: false, reason: "agent not found" };
   return { ok: true, machineId: preflight.machineId, cfg };
 }
@@ -1181,10 +1186,10 @@ async function conversationTurnAgentStartPreflight(serverId: string, agentId: st
   return { ok: true };
 }
 
-async function conversationTurnAgentStartTarget(serverId: string, agentId: string): Promise<AgentStartTarget | { ok: false; reason: string; retryable?: boolean }> {
+async function conversationTurnAgentStartTarget(serverId: string, agentId: string, scopeCtx?: ScopeContext): Promise<AgentStartTarget | { ok: false; reason: string; retryable?: boolean }> {
   const preflight = await conversationTurnAgentStartPreflight(serverId, agentId);
   if (!preflight.ok) return preflight;
-  return agentStartTarget(serverId, agentId);
+  return agentStartTarget(serverId, agentId, scopeCtx);
 }
 async function agentControlTarget(serverId: string, agentId: string): Promise<AgentControlTarget | { ok: false; reason: string }> {
   const a = (await db.select({
@@ -1238,6 +1243,10 @@ export async function resetAgent(serverId: string, agentId: string, wipeWorkspac
   if (!target.ok) return target;
   const result = await requestAgentControl(serverId, target, { type: "agent:reset", agentId, wipeWorkspace, clearMemory });
   if (!result.ok) return result;
+  // Scoped sessions: reset drops every per-scope session chain too — the daemon uplinks one
+  // agent:session null per running scope (best effort for the scopes it knows), this delete clears
+  // the agent's whole agent_sessions table so the next start is cold even for scopes it never saw.
+  await db.delete(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId));
   await db.update(schema.agents).set({ status: "inactive", activity: "offline", sessionId: null }).where(and(eq(schema.agents.id, agentId), eq(schema.agents.serverId, serverId)));
   await publishAgentState(serverId, agentId);
   return { ok: true };

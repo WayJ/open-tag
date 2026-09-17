@@ -103,7 +103,7 @@ conn = new Connection(serverUrl, apiKey, (msg) => {
     // daemon runs on a different host than the server, e.g. local daemon ↔ getopentag.com).
     case "agent:start": runAgentControl(msg, () => mgr.start(msg.agentId, { ...msg.config, serverUrl })); break;
     case "agent:deliver": {
-      const admission = mgr.deliver(msg.agentId, msg.from ?? "someone", msg.target ?? "", !!msg.mentioned, { targetName: msg.targetName, msgShort: msg.msgShort, isTask: msg.isTask, streamId: msg.streamId, turnId: msg.turnId, turnMessageCount: msg.turnMessageCount, attention: msg.attention, deliveryId: msg.deliveryId, seq: msg.seq });
+      const admission = mgr.deliver(msg.agentId, msg.from ?? "someone", msg.target ?? "", !!msg.mentioned, { targetName: msg.targetName, msgShort: msg.msgShort, isTask: msg.isTask, streamId: msg.streamId, turnId: msg.turnId, turnMessageCount: msg.turnMessageCount, attention: msg.attention, deliveryId: msg.deliveryId, seq: msg.seq, scope: msg.scope });
       const sendPending = () => conn.send({ type: "agent:deliver:pending", agentId: msg.agentId, seq: msg.seq, deliveryId: msg.deliveryId });
       sendPending();
       const pendingHeartbeat = setInterval(sendPending, DELIVERY_PENDING_HEARTBEAT_MS);

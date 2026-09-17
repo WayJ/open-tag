@@ -125,7 +125,7 @@ async function onDaemon(ws: WebSocket, key: string): Promise<void> {
           if (released) rejectAgentDeliveryAck(delivery.deliveryId, delivery.agentId, delivery.seq, typeof msg.error === "string" ? msg.error : undefined);
         }
       }
-      else if (msg.type === "agent:session" && msg.agentId) { await db.update(schema.agents).set({ sessionId: msg.sessionId }).where(eq(schema.agents.id, msg.agentId)); await publish(serverId!, { type: "agent:session", agentId: msg.agentId, sessionId: msg.sessionId }); } // forward to the frontend
+      else if (msg.type === "agent:session" && msg.agentId) await handleAgentSessionUplink(serverId!, msg);
       else if (msg.type === "agent:trajectory" && msg.agentId) {
         const a = (await db.select().from(schema.agents).where(eq(schema.agents.id, msg.agentId)))[0];
         await publish(serverId!, { type: "trajectory", agentId: msg.agentId, channelId: msg.channelId, name: a?.name, entries: msg.entries ?? [] });
@@ -222,6 +222,27 @@ async function onReady(serverId: string, key: string, msg: any): Promise<string>
     }
   }
   return machineId;
+}
+
+/** daemon → server session report ("agent:session"). With a valid scope ({type:"channel"|"thread", id})
+ *  the session id is keyed to (agent, scope) in agent_sessions — one persistent session per channel/thread.
+ *  Without a scope (or with an invalid one), the legacy agent-wide agents.session_id column is written,
+ *  so old daemons in a mixed fleet keep working. A null sessionId (agent cleared its session) flows
+ *  through the same paths. */
+export async function handleAgentSessionUplink(serverId: string, msg: any): Promise<void> {
+  const scope = msg.scope && (msg.scope.type === "channel" || msg.scope.type === "thread") && typeof msg.scope.id === "string" && msg.scope.id
+    ? { type: msg.scope.type as "channel" | "thread", id: msg.scope.id }
+    : null;
+  if (scope) {
+    await db.insert(schema.agentSessions).values({ serverId, agentId: msg.agentId, scopeType: scope.type, scopeId: scope.id, sessionId: msg.sessionId ?? null })
+      .onConflictDoUpdate({
+        target: [schema.agentSessions.agentId, schema.agentSessions.scopeType, schema.agentSessions.scopeId],
+        set: { sessionId: msg.sessionId ?? null, updatedAt: new Date() },
+      });
+  } else {
+    await db.update(schema.agents).set({ sessionId: msg.sessionId }).where(eq(schema.agents.id, msg.agentId));
+  }
+  await publish(serverId, { type: "agent:session", agentId: msg.agentId, sessionId: msg.sessionId, ...(scope ? { scope } : {}) }); // forward to the frontend
 }
 
 async function onAgentUpdate(serverId: string, msg: any): Promise<void> {
