@@ -17,6 +17,7 @@ import { IconFile, IconExternalLink, IconDownload } from "../icons.tsx";
 import { Avatar, resolveAvatar } from "../Avatar.tsx";
 import { Lightbox } from "../Lightbox.tsx";
 import { AttPreview } from "../AttPreview.tsx";
+import { AttMdPreview } from "../AttMdPreview.tsx";
 import { TaskBoard, ynOptions, ST_LABEL } from "../TaskBoard.tsx";
 import { PaneEmpty } from "../PaneEmpty.tsx";
 import { ChatSkeleton } from "./Skeleton.tsx";
@@ -33,6 +34,10 @@ const fmtSize = (n?: number) => (!n ? "" : n < 1024 ? n + " B" : n < 1048576 ? (
 const isImage = (m?: string) => !!m && m.startsWith("image/");
 const isVideo = (m?: string) => !!m && m.startsWith("video/");
 const isHtmlDoc = (m?: string) => m === "text/html" || m === "application/xhtml+xml";
+// Markdown gate may fall back to the filename extension (unlike html's mime-only gate):
+// there is no iframe to blank out — fetch().text() reads the body regardless of the
+// stored disposition, so an octet-stream .md uploaded by an old client still previews.
+const isMarkdownDoc = (m?: string, filename?: string) => m === "text/markdown" || /\.(md|markdown)$/i.test(filename ?? "");
 export const BACK_TO_BOTTOM_SCROLL_MS = 800;
 export const MESSAGE_ENTER_PIN_MS = 1000;
 export const backToBottomEase = (t: number) => 1 - Math.pow(1 - t, 3);
@@ -92,6 +97,12 @@ function AttCard({ a, url }: { a: Att; url: string }) {
       <IconFile size={14} /><span className="grow">{a.filename}</span><span className="asz">{fmtSize(a.sizeBytes)}</span>
     </a>
     {pv && <AttPreview url={url} filename={a.filename} onClose={() => setPv(false)} />}
+  </>);
+  if (isMarkdownDoc(a.mimeType, a.filename)) return (<>
+    <a className="msg-att" href={url} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); setPv(true); }} title={a.filename}>
+      <IconFile size={14} /><span className="grow">{a.filename}</span><span className="asz">{fmtSize(a.sizeBytes)}</span>
+    </a>
+    {pv && <AttMdPreview url={url} filename={a.filename} onClose={() => setPv(false)} />}
   </>);
   return <a className="msg-att" href={url} target="_blank" rel="noreferrer"><IconFile size={14} /><span className="grow">{a.filename}{vErr ? i18n.t("chat.videoUnsupported") : ""}</span><span className="asz">{fmtSize(a.sizeBytes)}</span></a>;
 }
@@ -875,7 +886,7 @@ function ChannelFiles({ channelId }: { channelId: string }) {
   const { api, attachmentUrl, slug } = useStore();
   const nav = useNavigate();
   const [files, setFiles] = useState<any[]>([]);
-  const [pv, setPv] = useState<{ id: string; filename: string } | null>(null);
+  const [pv, setPv] = useState<{ id: string; filename: string; mimeType?: string } | null>(null);
   useEffect(() => { (async () => { const d = await api("GET", `/api/channels/${channelId}/files`); setFiles(d?.files || []); })(); }, [channelId]);
   return (
     <div className="scroll ch-view-enter">
@@ -883,7 +894,10 @@ function ChannelFiles({ channelId }: { channelId: string }) {
         : files.map((f) => (
           <div key={f.id} className="card file-row">
             <a className="file-main" href={attachmentUrl(f.id)} target="_blank" rel="noreferrer"
-               onClick={(e) => { if (isHtmlDoc(f.mimeType)) { e.preventDefault(); setPv({ id: f.id, filename: f.filename }); } }}>
+               onClick={(e) => {
+                 const previewable = isHtmlDoc(f.mimeType) || isMarkdownDoc(f.mimeType, f.filename);
+                 if (previewable) { e.preventDefault(); setPv({ id: f.id, filename: f.filename, mimeType: f.mimeType }); }
+               }}>
               {isImage(f.mimeType) ? <img className="file-thumb" src={attachmentUrl(f.id)} alt={f.filename} loading="lazy" /> : <IconFile size={22} />}
               <div className="grow"><div className="who">{f.filename}</div><div className="meta">{fmtSize(f.sizeBytes)} · {f.uploader?.displayName || f.uploader?.name || (f.uploader?.type === "agent" ? t("chat.agentKind") : t("chat.memberKind"))} · {fmtDateTime(f.createdAt)}</div></div>
             </a>
@@ -893,7 +907,9 @@ function ChannelFiles({ channelId }: { channelId: string }) {
             </div>
           </div>
         ))}
-      {pv && <AttPreview url={attachmentUrl(pv.id)} filename={pv.filename} onClose={() => setPv(null)} />}
+      {pv && (isHtmlDoc(pv.mimeType)
+        ? <AttPreview url={attachmentUrl(pv.id)} filename={pv.filename} onClose={() => setPv(null)} />
+        : <AttMdPreview url={attachmentUrl(pv.id)} filename={pv.filename} onClose={() => setPv(null)} />)}
     </div>
   );
 }

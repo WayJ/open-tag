@@ -582,6 +582,7 @@ aside.traj-col h2{position:relative;font-size:12px;font-weight:600;letter-spacin
 .att-preview-bar .im:hover{color:var(--ink);background:var(--surface-strong)}
 .att-preview-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
 .att-preview-frame{flex:1;width:100%;border:none;background:#fff}
+.att-preview-md{flex:1;overflow:auto;padding:16px 20px;background:var(--surface)}
 .att-preview-err{flex:1;display:flex;align-items:center;justify-content:center;color:var(--ink-2);font-size:14px}
 .file-thumb{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:none;background:var(--surface-strong)}
 /* Message emoji reactions */
