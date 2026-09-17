@@ -9,8 +9,15 @@ from `main`; see commit history for fine-grained server/web changes.
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-09-17
+
 ### Fixed
 
+- Agent CLI attachment uploads now preserve the file's MIME type (extension-inferred
+  `Blob { type }`), so images/PDF/HTML uploaded by agents preview inline instead of
+  landing as forced downloads. Server-side fallback: uploads declared
+  `application/octet-stream` are sniffed by magic bytes (PNG/JPEG/GIF/PDF only — all
+  serve-time whitelisted; a wrong sniff can at worst show a broken image, never execute).
 - Pi-compatible runtimes can be launched through an explicit `OPEN_TAG_PI_COMMAND`, avoiding
   Windows batch wrappers that truncate multiline wake prompts. A zero exit with no parseable JSON
   events is now reported as an error instead of producing a misleading empty "Handled" receipt.

@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createLogger } from "../log.js";
+import { mimeFor } from "./mime.js";
 
 const log = createLogger("cli");
 const BASE = process.env.OPEN_TAG_SERVER_URL ?? "http://localhost:7777";
@@ -123,7 +124,11 @@ attachment.command("upload").description("upload a file (returns attachmentId; u
   const buf = await readFile(opts.file);
   const fd = new FormData();
   fd.append("channel", opts.channel);
-  fd.append("files", new Blob([new Uint8Array(buf)]), basename(opts.file));
+  // Blob without { type } is sent as application/octet-stream — every CLI upload would
+  // be stored (and served) as a forced download. Infer the type from the extension so
+  // previews work (images inline, HTML → Tier 4 sandbox); unknown extensions stay
+  // octet-stream and fall back to the server's magic-byte sniff.
+  fd.append("files", new Blob([new Uint8Array(buf)], { type: mimeFor(opts.file) }), basename(opts.file));
   const res = await fetch(BASE + "/agent-api/attachment/upload", { method: "POST", headers: { authorization: `Bearer ${KEY}`, "x-agent-id": AGENT }, body: fd });
   const d: any = await res.json().catch(() => ({}));
   if (!res.ok) { console.error(`Error: ${d.error ?? res.statusText}`); if (d.code) console.error(`Code: ${d.code}`); process.exit(1); }
