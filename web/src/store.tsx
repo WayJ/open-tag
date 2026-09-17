@@ -12,7 +12,7 @@ export interface Machine { id: string; name?: string; hostname?: string; os?: st
 export interface Human { userId: string; name: string; displayName?: string; role?: string; description?: string; avatarUrl?: string | null }
 export interface ServerInfo { id: string; name: string; slug: string; avatarUrl?: string | null; role?: string; capabilities?: Record<string, boolean> }
 export interface Me { id: string; name: string; displayName?: string }
-export interface Att { id: string; filename: string; mimeType?: string; sizeBytes?: number }
+export interface Att { id: string; filename: string; mimeType?: string; sizeBytes?: number; artifactName?: string; artifactVersion?: number; artifactDescription?: string | null }
 export interface Reaction { emoji: string; count: number; reactorIds: string[]; reactorNames: string[] }
 export interface ActionMeta { kind: string; state: "prepared" | "executed"; action: { type: string; name: string; description?: string | null; visibility?: string; initialHumans?: string[]; initialAgents?: string[]; requiredComputer?: string | null; suggestedComputer?: string | null }; executedByUserName?: string | null; result?: { kind: string; id: string; name: string } | null }
 export interface AgentActivityItem { timestamp: number; kind: string; activity?: string | null; detail?: string | null; text?: string | null; toolName?: string | null; toolInput?: string | null }

@@ -9,7 +9,7 @@ import { X } from "lucide-react";
 import { IconDownload } from "./icons.tsx";
 import i18n from "./i18n";
 
-export function AttPreview({ url, filename, onClose }: { url: string; filename: string; onClose: () => void }) {
+export function AttPreview({ url, filename, label, onClose }: { url: string; filename: string; label?: string; onClose: () => void }) {
   const [err, setErr] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
@@ -24,11 +24,11 @@ export function AttPreview({ url, filename, onClose }: { url: string; filename: 
     return () => { window.removeEventListener("keydown", h); prevFocus.current?.focus(); };
   }, [onClose]);
   return createPortal(
-    <div className="att-preview-bg" role="dialog" aria-modal="true" aria-label={filename} onClick={onClose}>
+    <div className="att-preview-bg" role="dialog" aria-modal="true" aria-label={label ?? filename} onClick={onClose}>
       <button ref={closeRef} className="lightbox-x" onClick={onClose} aria-label={i18n.t("chat.close")}><X size={20} /></button>
       <div className="att-preview-panel" onClick={(e) => e.stopPropagation()}>
         <div className="att-preview-bar">
-          <span className="att-preview-name" title={filename}>{filename}</span>
+          <span className="att-preview-name" title={label ?? filename}>{label ?? filename}</span>
           <a className="im" title={i18n.t("chat.download")} href={url} download={filename} target="_blank" rel="noreferrer"><IconDownload size={14} className="im-bounce-down" /></a>
         </div>
         {err

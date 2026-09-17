@@ -302,6 +302,44 @@ export const attachments = pgTable("attachments", {
   idTextPrefix: index("attachments_id_text_prefix_idx").using("btree", sql`(${t.id}::text) text_pattern_ops`),
 }));
 
+// ── Channel artifacts ────────────────────────────────────────
+// Channel artifacts: versioned deliverables agents publish via CLI (`open-tag artifact publish`).
+// name is unique per channel; every publish appends a version row pointing at a fresh
+// attachment (attachmentId unique — one attachment belongs to at most one version).
+// No independent ACL: visibility rides attachments.channelId through the existing channel gates.
+export const artifacts = pgTable("artifacts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => servers.id),
+  channelId: uuid("channel_id").notNull().references(() => channels.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdByType: text("created_by_type").notNull(),        // agent | user
+  createdByAgentId: uuid("created_by_agent_id").references(() => agents.id),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  chanUniq: uniqueIndex("artifacts_channel_name_uniq").on(t.channelId, t.name),
+}));
+
+export const artifactVersions = pgTable("artifact_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  artifactId: uuid("artifact_id").notNull().references(() => artifacts.id, { onDelete: "cascade" }),
+  serverId: uuid("server_id").notNull().references(() => servers.id),
+  channelId: uuid("channel_id").notNull().references(() => channels.id),
+  version: integer("version").notNull(),
+  attachmentId: uuid("attachment_id").notNull().references(() => attachments.id), // no cascade: deleting a referenced attachment is blocked (intentional)
+  note: text("note"),
+  createdByType: text("created_by_type").notNull(),        // agent | user
+  createdByAgentId: uuid("created_by_agent_id").references(() => agents.id),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  verUniq: uniqueIndex("artifact_versions_artifact_version_uniq").on(t.artifactId, t.version),
+  attUniq: uniqueIndex("artifact_versions_attachment_uniq").on(t.attachmentId),
+  byChannel: index("artifact_versions_channel_idx").on(t.channelId),
+}));
+
 // ── Reminders / Knowledge base (tables created first, logic to follow) ────────────────────────
 export const reminders = pgTable("reminders", {
   id: uuid("id").defaultRandom().primaryKey(),
