@@ -1243,6 +1243,10 @@ export async function resetAgent(serverId: string, agentId: string, wipeWorkspac
   if (!target.ok) return target;
   const result = await requestAgentControl(serverId, target, { type: "agent:reset", agentId, wipeWorkspace, clearMemory });
   if (!result.ok) return result;
+  // Scoped sessions: reset drops every per-scope session chain too — the daemon uplinks one
+  // agent:session null per running scope (best effort for the scopes it knows), this delete clears
+  // the agent's whole agent_sessions table so the next start is cold even for scopes it never saw.
+  await db.delete(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId));
   await db.update(schema.agents).set({ status: "inactive", activity: "offline", sessionId: null }).where(and(eq(schema.agents.id, agentId), eq(schema.agents.serverId, serverId)));
   await publishAgentState(serverId, agentId);
   return { ok: true };

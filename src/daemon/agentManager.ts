@@ -42,11 +42,11 @@ interface LifecycleSettlement { promise: Promise<void>; resolve: () => void; rej
 interface DeliverBuf { count: number; from: string; target: string; targetName: string; firstShort: string; latestShort: string; isTask: boolean; mentioned: boolean; targets: Set<string>; timer: ReturnType<typeof setTimeout>; admissions: DeliveryAdmission[]; streamId?: string; attention?: string; deliveryId?: string; seq?: number; }
 export interface DeliverMeta { targetName?: string; msgShort?: string; isTask?: boolean; streamId?: string; turnId?: string; turnMessageCount?: number; attention?: string; deliveryId?: string; seq?: number; scope?: AgentScope; }
 interface Running { session: RuntimeSession; config: AgentConfig; sessionId: string | null; initialAdmission: LifecycleSettlement; exit: LifecycleSettlement; idleTimer?: ReturnType<typeof setTimeout>; deliverBufs?: Map<string, DeliverBuf>; deliveryQueue?: DeliverBuf[]; turnActive: boolean; pid: number; }
-interface QueuedStart { agentId: string; config: AgentConfig; enqueuedAt: number; }
+interface QueuedStart { key: string; agentId: string; config: AgentConfig; enqueuedAt: number; }
 interface PendingDeliver { from: string; target: string; mentioned: boolean; meta: DeliverMeta; admission: DeliveryAdmission; }
 interface PendingDeliverQueue { items: PendingDeliver[]; timer?: ReturnType<typeof setTimeout>; }
 interface DurableDeliveryAdmission { promise: Promise<void>; expiresAt: number; }
-interface StartAttempt { promise: Promise<void>; cancelled: boolean; }
+interface StartAttempt { promise: Promise<void>; cancelled: boolean; scope?: AgentScope; }
 interface ActiveReplyPreview { channelId: string; streamId: string; name: string; eventSeq: number; }
 interface AgentManagerOptions {
   dataDir?: string;
@@ -54,12 +54,16 @@ interface AgentManagerOptions {
   deliverDebounceMs?: number;
   oneShotDeliverDebounceMs?: number;
   pendingDeliverTtlMs?: number;
+  idleMs?: number;
   runtimeResolver?: (name: string) => Runtime | null;
   budget?: ResourceBudget;
   beforeRuntimeDelivery?: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
 }
 
 export class AgentManager {
+  // Data-plane state (deliver/start/session) is keyed by scopeKey (agentId:scope); the control plane
+  // (stop/sleep/reset/dequeue/profile, runControl's controlTails) stays agentId-granular.
+  // `deliveryAdmissions` is keyed by deliveryId (cross-scope dedup fence) — deliberately NOT scoped.
   private agents = new Map<string, Running>();
   private starting = new Map<string, StartAttempt>();
   private pendingDelivers = new Map<string, PendingDeliverQueue>();
@@ -77,6 +81,7 @@ export class AgentManager {
   private deliverDebounceMs: number;
   private oneShotDeliverDebounceMs: number;
   private pendingDeliverTtlMs: number;
+  private idleMs: number;
   private runtimeResolver: (name: string) => Runtime | null;
   private beforeRuntimeDelivery: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   private budget: ResourceBudget;
@@ -90,6 +95,7 @@ export class AgentManager {
     this.deliverDebounceMs = opts.deliverDebounceMs ?? DELIVER_DEBOUNCE_MS;
     this.oneShotDeliverDebounceMs = opts.oneShotDeliverDebounceMs ?? ONE_SHOT_DELIVER_DEBOUNCE_MS;
     this.pendingDeliverTtlMs = opts.pendingDeliverTtlMs ?? PENDING_DELIVER_TTL_MS;
+    this.idleMs = opts.idleMs ?? IDLE_MS;
     this.runtimeResolver = opts.runtimeResolver ?? getRuntime;
     this.beforeRuntimeDelivery = opts.beforeRuntimeDelivery ?? (async () => {});
     // Memory pressure monitor: every 10s, cap running agents if free < 500 MB
@@ -125,19 +131,26 @@ export class AgentManager {
       }
       if (maxId) {
         const config = this.agents.get(maxId)?.config;
-        const maxAgentId = agentIdOf(maxId);
-        if (config && !this.startQueue.some((q) => q.agentId === maxAgentId)) {
-          this.startQueue.push({ agentId: maxAgentId, config, enqueuedAt: Date.now() });
+        if (config && !this.startQueue.some((q) => q.key === maxId)) { // maxId IS the scope key (agents map key)
+          this.startQueue.push({ key: maxId, agentId: agentIdOf(maxId), config, enqueuedAt: Date.now() });
         }
         this.budget.queueLength = this.startQueue.length;
         this.log.warn("darwin: sleeping heaviest agent to relieve memory pressure", { agentId: maxId, rssMB: maxRss });
-        void this.sleep(maxId).catch((error) => this.log.warn("pressure sleep failed", { agentId: maxId, detail: String(error) }));
+        void this.sleepScope(maxId).catch((error) => this.log.warn("pressure sleep failed", { agentId: maxId, detail: String(error) }));
       }
     }
   }
 
   /** Agent ids currently running (one agent may run several scope-keyed runtimes). */
   running(): string[] { return [...new Set([...this.agents.keys()].map(agentIdOf))]; }
+
+  /** True while any scope of this agent is running or starting. Agent-level status reports
+   *  (queued/inactive/sleeping/error) must be withheld in that case, so the UI never flips an
+   *  agent with a live scope to a dormant state. */
+  private hasAliveScope(agentId: string): boolean {
+    return [...this.agents.keys()].some((k) => agentIdOf(k) === agentId)
+      || [...this.starting.keys()].some((k) => agentIdOf(k) === agentId);
+  }
 
   /** Serialize lifecycle commands for one agent while keeping different agents independent. */
   runControl<T>(agentId: string, operation: () => T | Promise<T>): Promise<T> {
@@ -163,15 +176,16 @@ export class AgentManager {
     return this.budget.status();
   }
   queuedAgents(): QueuedStart[] { return [...this.startQueue]; }
-  /** Remove a queued start request (user cancelled). */
+  /** Remove every queued start request of this agent (all scopes — user cancelled). */
   dequeue(agentId: string): void {
-    const idx = this.startQueue.findIndex((q) => q.agentId === agentId);
-    if (idx === -1) return;
-    this.startQueue.splice(idx, 1);
+    const remaining = this.startQueue.filter((q) => q.agentId !== agentId);
+    if (remaining.length === this.startQueue.length) return;
+    this.startQueue = remaining;
     const error = new Error(`agent dequeued before delivery admission: ${agentId}`);
     this.invalidateDeliveryLifecycle(agentId, error);
     this.rejectPendingDeliver(agentId, error);
     this.budget.queueLength = this.startQueue.length;
+    if (this.hasAliveScope(agentId)) return; // a live sibling scope owns the agent-level status
     this.send({ type: "agent:status", agentId, status: "inactive" });
     this.sendAgentActivity(agentId, "offline", "dequeued");
     this.log.info("dequeued", { agentId });
@@ -183,18 +197,32 @@ export class AgentManager {
     return [...this.agents.keys()].filter((k) => agentIdOf(k) === idOrKey);
   }
 
-  // Tear down process: clear timers + remove from map first (critical: deletion before session.stop() lets the onExit has() guard recognize this as an intentional stop, suppressing unexpected sleeping status) + stop runtime. Accepts an agentId (tears down every scope) or an exact scope key. Returns whether anything was found.
+  // Tear down process: clear timers + remove from map first (critical: deletion before session.stop() lets the onExit has() guard recognize this as an intentional stop, suppressing unexpected sleeping status) + stop runtime. Accepts an agentId (tears down every scope) or an exact scope key (internal scope-granular sleep). Returns whether anything was found.
   private async teardown(idOrKey: string): Promise<boolean> {
     const agentId = agentIdOf(idOrKey);
+    // A scope key always contains ":" (agentIds are colon-free uuids) — an exact-key call fences only
+    // that scope's delivery lifecycle; a whole-agent call fences every scope the agent has state under.
+    const scoped = idOrKey.includes(":");
     const error = new Error(`agent stopped before delivery admission: ${agentId}`);
-    this.invalidateDeliveryLifecycle(agentId, error);
-    const attempt = this.starting.get(agentId);
-    if (attempt) attempt.cancelled = true;
-    this.rejectPendingDeliver(agentId, error);
+    const attempts: StartAttempt[] = [];
+    if (scoped) {
+      this.invalidateDeliveryLifecycleKey(idOrKey, error);
+      const attempt = this.starting.get(idOrKey);
+      if (attempt) { attempt.cancelled = true; attempts.push(attempt); }
+      this.rejectPendingDeliverKey(idOrKey, error);
+    } else {
+      this.invalidateDeliveryLifecycle(agentId, error);
+      for (const [k, attempt] of this.starting) {
+        if (agentIdOf(k) !== agentId) continue;
+        attempt.cancelled = true;
+        attempts.push(attempt);
+      }
+      this.rejectPendingDeliver(agentId, error);
+    }
     const keys = this.runningKeys(idOrKey);
     if (!keys.length) {
-      if (attempt) await attempt.promise.catch(() => {});
-      return !!attempt;
+      await Promise.all(attempts.map((a) => a.promise.catch(() => {})));
+      return attempts.length > 0;
     }
     const runnings: Running[] = [];
     for (const key of keys) {
@@ -211,13 +239,24 @@ export class AgentManager {
     // Stop every scope first, then wait: a zombie scope-A process must not delay scope-B's stop.
     for (const r of runnings) r.session.stop();
     for (const r of runnings) await r.exit.promise;
-    if (attempt) await attempt.promise.catch(() => {});
+    await Promise.all(attempts.map((a) => a.promise.catch(() => {})));
     return true;
   }
-  // User-initiated stop (agentId or one scope key): emits inactive/offline
-  async stop(idOrKey: string): Promise<void> { if (!await this.teardown(idOrKey)) return; this.send({ type: "agent:status", agentId: agentIdOf(idOrKey), status: "inactive" }); this.sendAgentActivity(idOrKey, "offline"); }
-  // Idle sleep: emits sleeping/sleeping (activity also set to sleeping so the frontend activity+status dual mapping stays consistent; session is preserved for --resume on next wake)
-  async sleep(idOrKey: string): Promise<void> { if (!await this.teardown(idOrKey)) return; this.log.info("sleep", { agentId: agentIdOf(idOrKey) }); this.send({ type: "agent:status", agentId: agentIdOf(idOrKey), status: "sleeping" }); this.sendAgentActivity(idOrKey, "sleeping"); }
+  // User-initiated whole-agent stop (agent:stop control): tears down every scope, emits inactive/offline
+  async stop(agentId: string): Promise<void> { if (!await this.teardown(agentId)) return; this.send({ type: "agent:status", agentId, status: "inactive" }); this.sendAgentActivity(agentId, "offline"); }
+  // User-initiated whole-agent sleep (agent:sleep control): emits sleeping/sleeping (activity also set to sleeping so the frontend activity+status dual mapping stays consistent; session is preserved for --resume on next wake)
+  async sleep(agentId: string): Promise<void> { if (!await this.teardown(agentId)) return; this.log.info("sleep", { agentId }); this.send({ type: "agent:status", agentId, status: "sleeping" }); this.sendAgentActivity(agentId, "sleeping"); }
+  // Scope-granular sleep (idle timer / memory pressure / queue yield): stops exactly this scope; the
+  // agent-level sleeping report is withheld while a sibling scope of the same agent is still alive,
+  // so the UI never sees "sleeping" next to a scope that is still typing.
+  private async sleepScope(key: string): Promise<void> {
+    if (!await this.teardown(key)) return;
+    const agentId = agentIdOf(key);
+    this.log.info("sleep scope", { agentId, key });
+    if (this.hasAliveScope(agentId)) return; // a sibling scope is alive/starting — no agent-level sleeping
+    this.send({ type: "agent:status", agentId, status: "sleeping" });
+    this.sendAgentActivity(key, "sleeping");
+  }
   /** Try to start the next queued agent if budget allows. */
   private tryDequeue(): void {
     if (this.startQueue.length === 0) return;
@@ -227,13 +266,27 @@ export class AgentManager {
     const agentId = q.agentId;
     this.budget.queueLength = this.startQueue.length;
     this.log.info("dequeue -> start", { agentId });
-    this.send({ type: "agent:status", agentId, status: "inactive" });
-    void this.launchStart(agentId, scopeKey(agentId, q.config.scope), q.config).catch(() => {});
+    if (!this.hasAliveScope(agentId)) this.send({ type: "agent:status", agentId, status: "inactive" }); // a live sibling scope owns the agent-level status
+    void this.launchStart(agentId, q.key, q.config).catch(() => {});
   }
 
   /** Reset: stop the process + clear the server-side session (next start will not --resume); wipeWorkspace deletes the entire workspace; clearMemory clears MEMORY.md only. */
   async reset(agentId: string, wipeWorkspace = false, clearMemory = false): Promise<void> {
+    // Drop queued scoped starts first: a queued item carries a stale scope.sessionId and must not
+    // resurrect a just-reset session chain after a later dequeue. (Must precede teardown — teardown
+    // calls tryDequeue(), which would otherwise launch the queued item mid-reset.)
+    this.startQueue = this.startQueue.filter((q) => q.agentId !== agentId);
+    this.budget.queueLength = this.startQueue.length;
+    // Snapshot the scopes the daemon knows about before teardown removes them: each gets its own
+    // null session uplink (the server clears that agent_sessions row); the scope-less legacy null
+    // below clears agents.session_id (old column / mixed-fleet compat).
+    const knownScopes = new Map<string, AgentScope | undefined>();
+    for (const [k, r] of this.agents) if (agentIdOf(k) === agentId) knownScopes.set(k, r.config.scope);
+    for (const [k, a] of this.starting) if (agentIdOf(k) === agentId) knownScopes.set(k, a.scope);
     await this.teardown(agentId); // skip stop() to avoid double inactive emit; reset sends its own inactive/offline+detail=reset below
+    for (const scope of knownScopes.values()) {
+      if (scope) this.send({ type: "agent:session", agentId, sessionId: null, scope: { type: scope.type, id: scope.id } });
+    }
     this.send({ type: "agent:session", agentId, sessionId: null });
     const dir = path.join(this.dataDir, agentId);
     if (wipeWorkspace) {
@@ -287,7 +340,7 @@ export class AgentManager {
   private resetIdle(key: string): void {
     const r = this.agents.get(key); if (!r) return;
     if (r.idleTimer) clearTimeout(r.idleTimer);
-    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), idleMs: IDLE_MS }); void this.sleep(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, IDLE_MS);
+    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs }); void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, this.idleMs);
   }
 
   private startReplyPreview(key: string, r: Running, channelId: string, streamId?: string): void {
@@ -321,28 +374,28 @@ export class AgentManager {
     this.activeReplyPreviews.delete(key);
     this.send({ type: "agent:reply", agentId: agentIdOf(key), channelId: preview.channelId, streamId: preview.streamId, name: preview.name, op });
     const running = this.agents.get(key);
-    // Queue is waiting → sleep this agent so the next one can run
+    // Queue is waiting → sleep this scope so the next one can run
     if (op === "done" && !running?.deliveryQueue?.length && !running?.deliverBufs?.size && this.startQueue.length > 0) {
       const r = this.agents.get(key);
       if (r) {
-        this.log.info("reply done, queue waiting — sleeping agent", { agentId: agentIdOf(key) });
-        void this.sleep(key).catch((error) => this.log.warn("queued-agent sleep failed", { agentId: agentIdOf(key), detail: String(error) }));
+        this.log.info("reply done, queue waiting — sleeping scope", { agentId: agentIdOf(key), key });
+        void this.sleepScope(key).catch((error) => this.log.warn("queued-agent sleep failed", { agentId: agentIdOf(key), detail: String(error) }));
       }
     }
   }
 
   async start(agentId: string, config: AgentConfig): Promise<void> {
     const key = scopeKey(agentId, config.scope);
-    // `starting`/startQueue remain agentId-granular (Task 5 migrates them): a concurrent same-agent
-    // different-scope start joins this attempt instead of spawning, and a queued start's config can
-    // be overwritten by whichever scope's start lands last.
-    const existing = this.starting.get(agentId);
+    // `starting`/startQueue are scopeKey-granular: a concurrent same-agent different-scope start
+    // launches its own runtime instead of joining this attempt, and a queued scope's config can
+    // only be overwritten by a start for the same scope.
+    const existing = this.starting.get(key);
     if (existing) return existing.promise;
     if (this.agents.has(key)) return;
-    // Already queued — update config and return
-    if (this.startQueue.some((q) => q.agentId === agentId)) {
-      const idx = this.startQueue.findIndex((q) => q.agentId === agentId);
-      if (idx !== -1) this.startQueue[idx]!.config = config;
+    // Already queued for this scope — update config and return
+    const queuedIdx = this.startQueue.findIndex((q) => q.key === key);
+    if (queuedIdx !== -1) {
+      this.startQueue[queuedIdx]!.config = config;
       return;
     }
 
@@ -351,38 +404,40 @@ export class AgentManager {
     }
 
     // Memory pressure → queue
-    this.startQueue.push({ agentId, config, enqueuedAt: Date.now() });
+    this.startQueue.push({ key, agentId, config, enqueuedAt: Date.now() });
     this.budget.queueLength = this.startQueue.length;
-    this.send({ type: "agent:status", agentId, status: "queued" });
-    this.sendAgentActivity(agentId, "offline", "queued");
-    this.log.info("queued (memory pressure)", { agentId });
+    if (!this.hasAliveScope(agentId)) { // a live sibling scope owns the agent-level status
+      this.send({ type: "agent:status", agentId, status: "queued" });
+      this.sendAgentActivity(agentId, "offline", "queued");
+    }
+    this.log.info("queued (memory pressure)", { agentId, key });
   }
 
   private launchStart(agentId: string, key: string, config: AgentConfig): Promise<void> {
-    const attempt: StartAttempt = { promise: undefined as unknown as Promise<void>, cancelled: false };
-    this.starting.set(agentId, attempt);
+    const attempt: StartAttempt = { promise: undefined as unknown as Promise<void>, cancelled: false, scope: config.scope };
+    this.starting.set(key, attempt);
     attempt.promise = Promise.resolve()
       .then(() => this.startNow(agentId, key, config, attempt))
       .catch(async (error) => { await this.failStart(key, agentId, error); throw error; })
       .finally(() => {
-        if (this.starting.get(agentId) === attempt) this.starting.delete(agentId);
+        if (this.starting.get(key) === attempt) this.starting.delete(key);
         this.budget.release();
         this.tryDequeue();
       });
     return attempt.promise;
   }
 
-  private assertStartActive(agentId: string, attempt: StartAttempt): void {
-    if (attempt.cancelled || this.starting.get(agentId) !== attempt) throw new Error(`agent start cancelled: ${agentId}`);
+  private assertStartActive(key: string, attempt: StartAttempt): void {
+    if (attempt.cancelled || this.starting.get(key) !== attempt) throw new Error(`agent start cancelled: ${agentIdOf(key)}`);
   }
 
   private async startNow(agentId: string, key: string, config: AgentConfig, attempt: StartAttempt): Promise<void> {
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
     if (this.agents.has(key)) return;
     const runtime = this.runtimeResolver(config.runtime ?? "claude");
     if (!runtime) {
       this.log.error("no runtime", { runtime: config.runtime });
-      this.sendAgentActivity(agentId, "offline", `no runtime: ${config.runtime}`);
+      this.sendAgentActivity(key, "offline", `no runtime: ${config.runtime}`);
       throw new Error(`no runtime: ${config.runtime ?? "claude"}`);
     }
     if (runtime.experimental) this.log.warn("experimental runtime", { runtime: runtime.name });
@@ -392,18 +447,18 @@ export class AgentManager {
     await mkdir(this.dataDir, { recursive: true });
     await ensureManagedDirectory(this.dataDir, agentId);
     await ensureManagedDirectory(stateDir, "notes");
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
     try { await readManagedFile(stateDir, "MEMORY.md"); } catch (error: any) {
       const replaceUnsafeLink = error instanceof Error && error.message.includes("file is a symbolic link");
       if (error?.code !== "ENOENT" && !replaceUnsafeLink) throw error;
       await atomicWriteManagedFile(stateDir, "MEMORY.md", seedMemory(config.displayName || config.name, config.description));
     }
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
 
     let personality: string | null | undefined;
     try { personality = (await readManagedFile(stateDir, "personality.md")).toString("utf8"); if (!personality.trim()) personality = undefined; }
     catch { personality = undefined; }
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
 
     const effectiveDescription = personality ?? config.description;
     // Scoped runs chain onto the scope's own session; a fresh scope (sessionId null) must NOT fall
@@ -452,10 +507,10 @@ export class AgentManager {
         initialAdmissionSettled = true;
         if (error) {
           running.initialAdmission.reject(error);
-          this.rejectPendingDeliver(agentId, error);
+          this.rejectPendingDeliverKey(key, error);
         } else {
           running.initialAdmission.resolve();
-          this.acceptPendingStartup(agentId, runtime.name, running);
+          this.acceptPendingStartup(key, runtime.name, running);
         }
       },
       onAcceptedTurnFailure: completeFailedTurn,
@@ -479,15 +534,18 @@ export class AgentManager {
         running.exit.resolve();
         if (!running.initialAdmission.settled) running.initialAdmission.reject(startupError);
         if (this.agents.get(key) !== running) return;
-        this.invalidateDeliveryLifecycle(agentId, exitError);
-        this.rejectPendingDeliver(agentId, exitError);
+        this.invalidateDeliveryLifecycleKey(key, exitError);
+        this.rejectPendingDeliverKey(key, exitError);
         this.rejectBufferedDeliveries(running, exitError);
         this.agents.delete(key);
         this.tryDequeue();
         // Process died on its own (not intentionally stopped): keep status=sleeping (session preserved, @ can --resume to recover);
         // Non-zero exit code (crash/signal kill) → activity=error to surface the failure; clean exit → sleeping.
+        // Only the LAST surviving scope of the agent reports agent-level status/activity — a sibling
+        // scope still running must not surface "sleeping"/"error" for the whole agent (M-2).
         const crashed = code !== 0;
         this.finishReplyPreview(key, crashed ? "error" : "done");
+        if (this.hasAliveScope(agentId)) return; // a sibling scope is alive/starting — no agent-level report
         this.send({ type: "agent:status", agentId, status: "sleeping" });
         this.sendAgentActivity(key, crashed ? "error" : "sleeping", crashed ? `crashed (exit ${code ?? "signal"})` : "");
       },
@@ -500,14 +558,14 @@ export class AgentManager {
     // them as an inbox notice would drive a second turn on the same message (agents visibly
     // double-replied on cold start). Messages are persisted server-side — the nudge turn's
     // `message check` pulls them; only the reply preview needs the queued metadata.
-    await this.waitForDeliveryPreparations(agentId);
-    this.assertStartActive(agentId, attempt);
-    const pendingDeliverItems = this.pendingDelivers.get(agentId)?.items ?? [];
+    await this.waitForDeliveryPreparations(key);
+    this.assertStartActive(key, attempt);
+    const pendingDeliverItems = this.pendingDelivers.get(key)?.items ?? [];
     const pendingDeliveryCount = pendingDeliverItems.length;
     const useOneShotWakeNudge = !!runtime.oneShotWake && pendingDeliveryCount > 0;
     const startupDelivery = pendingDeliverItems[0];
     if (startupDelivery?.meta.deliveryId) await this.beforeRuntimeDelivery(agentId, startupDelivery.meta);
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
     this.agents.set(key, running);
     if (startupDelivery) this.startReplyPreview(key, running, startupDelivery.target, startupDelivery.meta.streamId);
     try {
@@ -523,20 +581,20 @@ export class AgentManager {
     running.pid = running.session.pid ?? 0;
 
     await running.initialAdmission.promise;
-    this.assertStartActive(agentId, attempt);
+    this.assertStartActive(key, attempt);
     if (this.agents.get(key) !== running) throw new Error(`runtime exited before start completed: ${agentId}`);
 
     this.send({ type: "agent:status", agentId, status: "active" });
     if (running.turnActive) this.sendAgentActivity(key, "working", "starting");
     this.log.info("agent started", { agentId, key, runtime: runtime.name, model: config.model ?? "(default)", resume: !!resumeSessionId, experimental: runtime.experimental ?? false });
     this.resetIdle(key);
-    if (pendingDeliveryCount > 0 && this.pendingDelivers.has(agentId)) {
-      this.log.debug("pending delivery awaiting startup nudge admission", { agentId, runtime: runtime.name, count: pendingDeliveryCount });
+    if (pendingDeliveryCount > 0 && this.pendingDelivers.has(key)) {
+      this.log.debug("pending delivery awaiting startup nudge admission", { agentId, key, runtime: runtime.name, count: pendingDeliveryCount });
     }
   }
 
-  private acceptPendingStartup(agentId: string, runtime: string, running: Running): void {
-    const q = this.pendingDelivers.get(agentId);
+  private acceptPendingStartup(key: string, runtime: string, running: Running): void {
+    const q = this.pendingDelivers.get(key);
     if (!q) return;
     const [startup, ...queued] = q.items;
     startup?.admission.resolve();
@@ -545,8 +603,8 @@ export class AgentManager {
       running.deliveryQueue = deliveryQueue;
       for (const item of queued) deliveryQueue.push(this.pendingItemToBuffer(item));
     }
-    this.clearPendingDeliver(agentId);
-    this.log.debug("pending deliver consumed by wake nudge", { agentId, runtime, count: startup ? 1 : 0, queued: queued.length });
+    this.clearPendingDeliver(key);
+    this.log.debug("pending deliver consumed by wake nudge", { agentId: agentIdOf(key), key, runtime, count: startup ? 1 : 0, queued: queued.length });
   }
 
   private pendingItemToBuffer(item: PendingDeliver): DeliverBuf {
@@ -575,7 +633,7 @@ export class AgentManager {
     const error = cause instanceof Error ? cause : new Error(String(cause));
     // A cancelled start was already invalidated by stop/reset; preserve that more specific
     // lifecycle error for deliveries that were concurrently loading the persistent fence.
-    if (!error.message.startsWith("agent start cancelled:")) this.invalidateDeliveryLifecycle(agentId, error);
+    if (!error.message.startsWith("agent start cancelled:")) this.invalidateDeliveryLifecycleKey(key, error);
     const running = this.agents.get(key);
     if (running?.idleTimer) clearTimeout(running.idleTimer);
     if (running) this.rejectBufferedDeliveries(running, error);
@@ -586,8 +644,8 @@ export class AgentManager {
       await running.exit.promise.catch(() => {});
     }
     this.finishReplyPreview(key, "error");
-    this.rejectPendingDeliver(agentId, error);
-    this.log.warn("agent start failed", { agentId, detail: String(error) });
+    this.rejectPendingDeliverKey(key, error);
+    this.log.warn("agent start failed", { agentId, key, detail: String(error) });
   }
 
   private rejectBufferedDeliveries(running: Running, error: Error): void {
@@ -645,19 +703,19 @@ export class AgentManager {
     return { promise, resolve, reject };
   }
 
-  private trackDeliveryPreparation(agentId: string, preparation: Promise<void>): void {
-    const pending = this.deliveryPreparations.get(agentId) ?? new Set<Promise<void>>();
-    this.deliveryPreparations.set(agentId, pending);
+  private trackDeliveryPreparation(key: string, preparation: Promise<void>): void {
+    const pending = this.deliveryPreparations.get(key) ?? new Set<Promise<void>>();
+    this.deliveryPreparations.set(key, pending);
     pending.add(preparation);
     void preparation.finally(() => {
       pending.delete(preparation);
-      if (!pending.size && this.deliveryPreparations.get(agentId) === pending) this.deliveryPreparations.delete(agentId);
+      if (!pending.size && this.deliveryPreparations.get(key) === pending) this.deliveryPreparations.delete(key);
     });
   }
 
-  private async waitForDeliveryPreparations(agentId: string): Promise<void> {
-    while (this.deliveryPreparations.get(agentId)?.size) {
-      await Promise.all([...this.deliveryPreparations.get(agentId)!]);
+  private async waitForDeliveryPreparations(key: string): Promise<void> {
+    while (this.deliveryPreparations.get(key)?.size) {
+      await Promise.all([...this.deliveryPreparations.get(key)!]);
     }
   }
 
@@ -670,42 +728,52 @@ export class AgentManager {
     return settlement;
   }
 
-  private queuePendingDeliver(agentId: string, item: PendingDeliver): void {
-    let q = this.pendingDelivers.get(agentId);
+  private queuePendingDeliver(key: string, item: PendingDeliver): void {
+    const agentId = agentIdOf(key);
+    let q = this.pendingDelivers.get(key);
     if (!q) {
       // A resource-pressure startQueue is an owned in-memory admission: it has no short TTL,
       // and will be consumed by the startup nudge when capacity returns. Ordinary out-of-order
       // deliver frames still expire loudly so the server can retry instead of silently losing work.
-      const resourceQueued = this.startQueue.some((queued) => queued.agentId === agentId);
+      const resourceQueued = this.startQueue.some((queued) => queued.key === key);
       const timer = resourceQueued ? undefined : setTimeout(() => {
-        this.rejectPendingDeliver(agentId, new Error(`pending delivery expired before agent start: ${agentId}`));
-        this.log.debug("pending deliver expired", { agentId });
+        this.rejectPendingDeliverKey(key, new Error(`pending delivery expired before agent start: ${agentId}`));
+        this.log.debug("pending deliver expired", { agentId, key });
       }, this.pendingDeliverTtlMs);
       q = { items: [], timer };
-      this.pendingDelivers.set(agentId, q);
+      this.pendingDelivers.set(key, q);
     }
     if (q.items.length >= 10) {
       item.admission.reject(new Error(`pending delivery queue full: ${agentId}`));
-      this.log.warn("pending delivery rejected: queue full", { agentId, count: q.items.length });
+      this.log.warn("pending delivery rejected: queue full", { agentId, key, count: q.items.length });
       return;
     }
     q.items.push(item);
-    this.log.debug("deliver queued pending start", { agentId, count: q.items.length });
+    this.log.debug("deliver queued pending start", { agentId, key, count: q.items.length });
   }
 
-  private clearPendingDeliver(agentId: string): void {
-    const q = this.pendingDelivers.get(agentId);
+  private clearPendingDeliver(key: string): void {
+    const q = this.pendingDelivers.get(key);
     if (!q) return;
     if (q.timer) clearTimeout(q.timer);
-    this.pendingDelivers.delete(agentId);
+    this.pendingDelivers.delete(key);
   }
 
-  private rejectPendingDeliver(agentId: string, error: Error): void {
-    const q = this.pendingDelivers.get(agentId);
+  /** Reject the pending delivers of exactly one scope key. */
+  private rejectPendingDeliverKey(key: string, error: Error): void {
+    const q = this.pendingDelivers.get(key);
     if (!q) return;
     if (q.timer) clearTimeout(q.timer);
-    this.pendingDelivers.delete(agentId);
+    this.pendingDelivers.delete(key);
     for (const item of q.items) item.admission.reject(error);
+  }
+
+  /** Reject the pending delivers of every scope of this agent (whole-agent lifecycle change). */
+  private rejectPendingDeliver(agentId: string, error: Error): void {
+    for (const key of [...this.pendingDelivers.keys()]) {
+      if (agentIdOf(key) !== agentId) continue;
+      this.rejectPendingDeliverKey(key, error);
+    }
   }
 
   private debounceMsFor(r: Running): number {
@@ -715,6 +783,7 @@ export class AgentManager {
 
   /** Resolve only after the runtime or cold-start queue has accepted responsibility for this delivery. */
   deliver(agentId: string, from: string, target: string, mentioned = false, meta: DeliverMeta = {}): Promise<void> {
+    const key = scopeKey(agentId, meta.scope);
     if (meta.deliveryId) {
       const now = Date.now();
       const existing = this.deliveryAdmissions.get(meta.deliveryId);
@@ -723,16 +792,16 @@ export class AgentManager {
         return existing.promise.then(() => this.beforeRuntimeDelivery(agentId, meta));
       }
       if (existing) this.deliveryAdmissions.delete(meta.deliveryId);
-      const predecessor = this.deliveryPreparationTails.get(agentId) ?? Promise.resolve();
-      const epoch = this.deliveryEpochs.get(agentId) ?? 0;
+      const predecessor = this.deliveryPreparationTails.get(key) ?? Promise.resolve();
+      const epoch = this.deliveryEpochs.get(key) ?? 0;
       let markPrepared!: () => void;
       const preparation = new Promise<void>((resolve) => { markPrepared = resolve; });
-      this.deliveryPreparationTails.set(agentId, preparation);
-      this.trackDeliveryPreparation(agentId, preparation);
+      this.deliveryPreparationTails.set(key, preparation);
+      this.trackDeliveryPreparation(key, preparation);
       void preparation.finally(() => {
-        if (this.deliveryPreparationTails.get(agentId) === preparation) this.deliveryPreparationTails.delete(agentId);
+        if (this.deliveryPreparationTails.get(key) === preparation) this.deliveryPreparationTails.delete(key);
       });
-      const promise = predecessor.catch(() => {}).then(() => this.admitDurableDelivery(agentId, from, target, mentioned, meta, epoch, markPrepared));
+      const promise = predecessor.catch(() => {}).then(() => this.admitDurableDelivery(key, from, target, mentioned, meta, epoch, markPrepared));
       const admission: DurableDeliveryAdmission = { promise, expiresAt: Number.POSITIVE_INFINITY };
       this.deliveryAdmissions.set(meta.deliveryId, admission);
       void promise.then(
@@ -747,7 +816,8 @@ export class AgentManager {
     return this.admitDelivery(agentId, from, target, mentioned, meta);
   }
 
-  private async admitDurableDelivery(agentId: string, from: string, target: string, mentioned: boolean, meta: DeliverMeta, epoch: number, markPrepared: () => void): Promise<void> {
+  private async admitDurableDelivery(key: string, from: string, target: string, mentioned: boolean, meta: DeliverMeta, epoch: number, markPrepared: () => void): Promise<void> {
+    const agentId = agentIdOf(key);
     const deliveryId = meta.deliveryId!;
     try {
       if (await this.deliveryAdmissionStore.has(deliveryId)) {
@@ -755,8 +825,8 @@ export class AgentManager {
         await this.beforeRuntimeDelivery(agentId, meta);
         return;
       }
-      if ((this.deliveryEpochs.get(agentId) ?? 0) !== epoch) {
-        throw this.deliveryCancellationErrors.get(agentId) ?? new Error(`agent lifecycle changed before delivery admission: ${agentId}`);
+      if ((this.deliveryEpochs.get(key) ?? 0) !== epoch) {
+        throw this.deliveryCancellationErrors.get(key) ?? new Error(`agent lifecycle changed before delivery admission: ${agentId}`);
       }
       const admission = this.admitDelivery(agentId, from, target, mentioned, meta);
       markPrepared();
@@ -774,21 +844,32 @@ export class AgentManager {
     }
   }
 
+  /** Fence one scope's delivery lifecycle (per-scope exit/failStart). */
+  private invalidateDeliveryLifecycleKey(key: string, error: Error): void {
+    this.deliveryEpochs.set(key, (this.deliveryEpochs.get(key) ?? 0) + 1);
+    this.deliveryCancellationErrors.set(key, error);
+  }
+
+  /** Fence every scope of this agent (whole-agent lifecycle change): any in-flight durable admission
+   *  that already captured an older epoch — including epoch 0 for a key with no entry yet — must
+   *  observe the bump, so sweep every key the agent currently has state under. */
   private invalidateDeliveryLifecycle(agentId: string, error: Error): void {
-    this.deliveryEpochs.set(agentId, (this.deliveryEpochs.get(agentId) ?? 0) + 1);
-    this.deliveryCancellationErrors.set(agentId, error);
+    const keys = new Set<string>();
+    for (const map of [this.agents, this.starting, this.pendingDelivers, this.deliveryPreparations, this.deliveryPreparationTails, this.deliveryEpochs, this.deliveryCancellationErrors]) {
+      for (const k of map.keys()) if (agentIdOf(k) === agentId) keys.add(k);
+    }
+    for (const key of keys) this.invalidateDeliveryLifecycleKey(key, error);
   }
 
   private admitDelivery(agentId: string, from: string, target: string, mentioned: boolean, meta: DeliverMeta): Promise<void> {
     const admission = this.createAdmission();
-    // Route by (agent, scope): a scoped deliver reaches only that scope's runtime. The `starting` /
-    // pendingDelivers fences below are still agentId-granular (Task 5 migrates them), so while a
-    // sibling scope of the same agent is starting, this deliver can be swallowed by that start's
-    // pending queue and consumed by its startup nudge instead of waiting for its own scope.
+    // Route by (agent, scope): a scoped deliver reaches only that scope's runtime, and the `starting` /
+    // pendingDelivers fences below are per-scope too — one scope's startup can no longer swallow a
+    // sibling scope's delivery.
     const key = scopeKey(agentId, meta.scope);
     const r = this.agents.get(key);
-    if (!r || this.starting.has(agentId)) {
-      this.queuePendingDeliver(agentId, { from, target, mentioned, meta, admission });
+    if (!r || this.starting.has(key)) {
+      this.queuePendingDeliver(key, { from, target, mentioned, meta, admission });
       return admission.promise;
     }
     // New servers already debounce by sender-scoped Conversation Turn. Keep each durable turn isolated

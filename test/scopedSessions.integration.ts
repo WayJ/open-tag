@@ -9,7 +9,8 @@ import { and, eq } from "drizzle-orm";
 import { db, schema } from "../src/db/index.ts";
 import { agentConfig, resolveScope, type AgentScope } from "../src/server/agentConfig.ts";
 import { handleAgentSessionUplink } from "../src/server/ws.ts";
-import { createServer } from "../src/server/core.ts";
+import { createServer, resetAgent } from "../src/server/core.ts";
+import { AGENT_CONTROL_ACK_CAPABILITY, registerDaemon, registerDaemonCapabilities, resolveDaemonRequest, unregisterDaemon } from "../src/server/daemonHub.ts";
 import { dispatchLegacyMessage, type ConversationTurnDispatchDeps, type DispatchMember } from "../src/server/conversationTurnDispatch.ts";
 
 const ts = Date.now();
@@ -189,6 +190,27 @@ async function main() {
   await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-ignored", scope: { type: "dm", id: dmChannelId } });
   const invalidRows = await db.select().from(schema.agentSessions).where(and(eq(schema.agentSessions.agentId, agentId), eq(schema.agentSessions.scopeType, "dm")));
   check("invalid scope type falls back to the legacy column (no agent_sessions row)", invalidRows.length === 0 && (await db.select({ sessionId: schema.agents.sessionId }).from(schema.agents).where(eq(schema.agents.id, agentId)))[0]!.sessionId === "sess-ignored");
+
+  console.log("\n[10] resetAgent clears agent_sessions for the whole agent (server side of agent:reset)");
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-reset-chan", scope: { type: "channel", id: channelId } });
+  await handleAgentSessionUplink(serverId, { type: "agent:session", agentId, sessionId: "sess-reset-thread", scope: { type: "thread", id: threadChannelId } });
+  await db.update(schema.agents).set({ sessionId: "sess-reset-legacy" }).where(eq(schema.agents.id, agentId));
+  // One fake capable daemon answers the control RPC (unbound agent control requires exactly one).
+  const daemonWs: any = {
+    readyState: 1,
+    send(data: string) {
+      const msg = JSON.parse(data);
+      if (typeof msg.requestId === "string") resolveDaemonRequest(msg.requestId, { type: "rpc:ack", requestId: msg.requestId });
+    },
+    close() {},
+  };
+  registerDaemon(daemonWs, serverId);
+  registerDaemonCapabilities(daemonWs, [AGENT_CONTROL_ACK_CAPABILITY]);
+  const resetResult = await resetAgent(serverId, agentId);
+  unregisterDaemon(daemonWs);
+  check("resetAgent control round-trips against the fake daemon", resetResult.ok === true);
+  check("resetAgent deletes every agent_sessions row for the agent", (await db.select().from(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId))).length === 0);
+  check("resetAgent clears the legacy agents.session_id column", (await db.select({ sessionId: schema.agents.sessionId }).from(schema.agents).where(eq(schema.agents.id, agentId)))[0]!.sessionId === null);
 }
 
 main()
