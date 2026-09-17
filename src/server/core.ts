@@ -217,7 +217,21 @@ async function autoJoinMentioned(serverId: string, channelId: string, content: s
 
 // Message serialization shape for message:new socket event (omits internal searchVector/agentSendKey).
 export interface ReactionAgg { emoji: string; count: number; reactorIds: string[]; reactorNames: string[]; }
-export function serializeMsg(msg: typeof schema.messages.$inferSelect, mentions: Member[], atts: (typeof schema.attachments.$inferSelect)[] = [], reactions: ReactionAgg[] = []) {
+export type ArtifactMeta = { artifactName: string; artifactVersion: number; artifactDescription: string | null };
+/** Batch artifact metadata for serialization. Single inArray query (N+1 forbidden). */
+export async function artifactMetaByAttachmentIds(ids: string[]): Promise<Map<string, ArtifactMeta>> {
+  if (!ids.length) return new Map();
+  const rows = await db.select({
+    attachmentId: schema.artifactVersions.attachmentId,
+    version: schema.artifactVersions.version,
+    name: schema.artifacts.name,
+    description: schema.artifacts.description,
+  }).from(schema.artifactVersions)
+    .innerJoin(schema.artifacts, eq(schema.artifacts.id, schema.artifactVersions.artifactId))
+    .where(inArray(schema.artifactVersions.attachmentId, ids));
+  return new Map(rows.map((r) => [r.attachmentId, { artifactName: r.name, artifactVersion: r.version, artifactDescription: r.description }]));
+}
+export function serializeMsg(msg: typeof schema.messages.$inferSelect, mentions: Member[], atts: (typeof schema.attachments.$inferSelect)[] = [], reactions: ReactionAgg[] = [], artifactMeta?: Map<string, ArtifactMeta>) {
   return {
     id: msg.id, seq: msg.seq, channelId: msg.channelId, threadId: msg.threadId,
     senderType: msg.senderType, senderId: msg.senderId, senderName: msg.senderName, senderMembershipStatus: "active",
@@ -226,7 +240,11 @@ export function serializeMsg(msg: typeof schema.messages.$inferSelect, mentions:
     taskStatus: msg.taskStatus, taskNumber: msg.taskNumber,
     taskAssigneeType: msg.taskAssigneeType, taskAssigneeId: msg.taskAssigneeId,
     taskClaimedAt: msg.taskClaimedAt, taskCompletedAt: msg.taskCompletedAt,
-    attachments: atts.map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes })),
+    attachments: atts.map((a) => {
+      const am = artifactMeta?.get(a.id);
+      return { id: a.id, filename: a.filename, mimeType: a.mimeType, sizeBytes: a.sizeBytes,
+        ...(am ? { artifactName: am.artifactName, artifactVersion: am.artifactVersion, artifactDescription: am.artifactDescription } : {}) };
+    }),
     mentions: mentions.map((x) => ({ type: x.type, id: x.id, name: x.name })),
     reactions,
     createdAt: msg.createdAt, updatedAt: msg.updatedAt,
@@ -288,7 +306,8 @@ async function serializeMessageById(messageId: string, target?: AgentInputPolicy
   const mentions: Member[] = mts.map((x) => ({ type: x.mentionType as "user" | "agent", id: x.mentionId, name: x.mentionName, displayName: x.mentionName }));
   const atts = await db.select().from(schema.attachments).where(eq(schema.attachments.messageId, messageId));
   const reactions = (await aggregateReactions([messageId], target)).get(messageId) ?? [];
-  return serializeMsg(msg, mentions, atts, reactions);
+  const ameta = await artifactMetaByAttachmentIds(atts.map((x) => x.id));
+  return serializeMsg(msg, mentions, atts, reactions, ameta);
 }
 
 /** Add reaction (add-or-noop): unique index deduplication, broadcast message:updated. */
@@ -511,9 +530,10 @@ export async function createMessage(opts: {
     msg!.threadId = th.id;
   }
   // Human-side realtime
-  await publish(opts.serverId, { type: "message", channelId: opts.channelId, message: { ...serializeMsg(msg!, mentions, atts), channelType: ch?.type ?? null } });
+  const ameta = await artifactMetaByAttachmentIds(atts.map((x) => x.id));
+  await publish(opts.serverId, { type: "message", channelId: opts.channelId, message: { ...serializeMsg(msg!, mentions, atts, [], ameta), channelType: ch?.type ?? null } });
   if (opts.asTask) {
-    await publish(opts.serverId, { type: "task", op: "created", task: serializeMsg(msg!, mentions, atts) });
+    await publish(opts.serverId, { type: "task", op: "created", task: serializeMsg(msg!, mentions, atts, [], ameta) });
     const actor = (opts.senderType === "user" || opts.senderType === "agent") && opts.senderId ? { type: opts.senderType, id: opts.senderId } : undefined;
     await sysTaskMsg(opts.serverId, opts.channelId, `${opts.senderName} created task #${taskNumber} "${taskTitle(opts.content)}"`, actor); // audit trail (task system messages)
   }
