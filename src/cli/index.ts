@@ -135,6 +135,34 @@ attachment.command("upload").description("upload a file (returns attachmentId; u
   for (const a of d.attachments ?? []) console.log(`Uploaded ${a.filename} -> ${a.attachmentId}`);
 });
 
+const artifact = program.command("artifact").description("versioned channel artifacts");
+artifact.command("publish").description("upload a file as a new version of a named artifact (re-publishing the same name appends a version)").requiredOption("--file <path>").requiredOption("--name <n>").requiredOption("--channel <channel>", "#name").option("--desc <t>").option("--note <t>").action(async (opts) => {
+  const buf = await readFile(opts.file);
+  const fd = new FormData();
+  fd.append("channel", opts.channel);
+  fd.append("name", opts.name);
+  if (opts.desc) fd.append("description", opts.desc);
+  if (opts.note) fd.append("note", opts.note);
+  // same MIME pipeline as attachment upload: Blob without { type } would force every artifact
+  // into octet-stream downloads (see the comment there).
+  fd.append("files", new Blob([new Uint8Array(buf)], { type: mimeFor(opts.file) }), basename(opts.file));
+  const res = await fetch(BASE + "/agent-api/artifact/publish", { method: "POST", headers: { authorization: `Bearer ${KEY}`, "x-agent-id": AGENT }, body: fd });
+  const d: any = await res.json().catch(() => ({}));
+  if (!res.ok) { console.error(`Error: ${d.error ?? res.statusText}`); if (d.code) console.error(`Code: ${d.code}`); process.exit(1); }
+  console.log(`Published ${d.name} v${d.version} -> attachmentId ${d.attachmentId} (attach with: message send --attach ${d.attachmentId})`);
+});
+artifact.command("list").description("list artifacts of a channel (latest version of each)").requiredOption("--channel <channel>").action(async (opts) => {
+  const d = await api("GET", `/agent-api/artifact/list?channel=${encodeURIComponent(opts.channel)}`);
+  if (!d.artifacts?.length) return console.log(`No artifacts in ${opts.channel}`);
+  for (const a of d.artifacts) console.log(`  v${a.latestVersion ?? "-"}  ${a.name}${a.description ? " — " + a.description : ""}  (${String(a.updatedAt).slice(0, 16).replace("T", " ")})${a.latestAttachmentId ? " att:" + a.latestAttachmentId : ""}`);
+});
+artifact.command("versions").description("show the version history of one artifact").requiredOption("--name <n>").requiredOption("--channel <channel>").action(async (opts) => {
+  const q = new URLSearchParams({ channel: opts.channel, name: opts.name });
+  const d = await api("GET", `/agent-api/artifact/versions?${q}`);
+  if (!d.versions?.length) return console.log("No versions.");
+  for (const v of d.versions) console.log(`  v${v.version}  ${v.filename}${v.note ? "  " + v.note : ""}  (${String(v.createdAt).slice(0, 16).replace("T", " ")})${v.attachmentId ? " att:" + v.attachmentId : ""}`);
+});
+
 const server = program.command("server").description("workspace information");
 server.command("info").description("list channels, agents, and humans").action(async () => {
   const d = await api("GET", "/agent-api/server/info");
