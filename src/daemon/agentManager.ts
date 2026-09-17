@@ -13,13 +13,15 @@ import { ResourceBudget, PRESSURE_MEM_MB } from "./resourceBudget.js";
 import { readProcessMemoryMB, applyMemoryPressure } from "./resourceLimit.js";
 import { DeliveryAdmissionStore } from "./deliveryAdmissionStore.js";
 import { resolveProjectDirectory } from "./projectDirectory.js";
-import { atomicWriteManagedFile, ensureManagedDirectory, readManagedFile } from "./stateFiles.js";
+import { atomicWriteManagedFile, ensureManagedDirectory, readManagedFile, readManagedMemoryFiles } from "./stateFiles.js";
+import { memoryFilesDigest } from "../daemonProtocol.js";
 
 const DATA_DIR = agentsDir();
 const IDLE_MS = Number(process.env.OPEN_TAG_IDLE_MS ?? 10 * 60 * 1000); // how long before idle sleep (kills process to save memory; next wake uses --resume)
 const DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_DELIVER_DEBOUNCE_MS ?? 3000); // batching window for deliveries while agent is busy (saves tokens, reduces interruptions)
 const ONE_SHOT_DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_ONE_SHOT_DELIVER_DEBOUNCE_MS ?? process.env.OPEN_TAG_HERMES_DELIVER_DEBOUNCE_MS ?? 500); // One-shot runtimes need a short fixed wait when there is only one live notice.
 const PENDING_DELIVER_TTL_MS = Number(process.env.OPEN_TAG_PENDING_DELIVER_TTL_MS ?? 15_000); // start+deliver can arrive back-to-back; keep deliver briefly while start prepares workspace
+const MEMORY_UPLOAD_DEBOUNCE_MS = Number(process.env.OPEN_TAG_MEMORY_UPLOAD_DEBOUNCE_MS ?? 2000); // turn-end quiet window before the managed-memory snapshot is read + uploaded
 
 /** Session scope carried in the daemon protocol: one persistent runtime session per (agent, channel|thread). */
 export interface AgentScope { type: "channel" | "thread"; id: string; sessionId: string | null }
@@ -58,12 +60,16 @@ interface AgentManagerOptions {
   runtimeResolver?: (name: string) => Runtime | null;
   budget?: ResourceBudget;
   beforeRuntimeDelivery?: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
+  machineId?: string; // stable machine identity, uplinked with each memory snapshot (wire symmetry; the server uses the connection identity)
+  memoryUploadDebounceMs?: number;
 }
 
 export class AgentManager {
   // Data-plane state (deliver/start/session) is keyed by scopeKey (agentId:scope); the control plane
   // (stop/sleep/reset/dequeue/profile, runControl's controlTails) stays agentId-granular.
   // `deliveryAdmissions` is keyed by deliveryId (cross-scope dedup fence) — deliberately NOT scoped.
+  // memoryUploadTimers/memoryUploadCache are agent-granular by design — memory is an agent-level
+  // resource (one managed snapshot per agent; scoped sessions all write the same workspace).
   private agents = new Map<string, Running>();
   private starting = new Map<string, StartAttempt>();
   private pendingDelivers = new Map<string, PendingDeliverQueue>();
@@ -75,6 +81,8 @@ export class AgentManager {
   private deliveryEpochs = new Map<string, number>();
   private deliveryCancellationErrors = new Map<string, Error>();
   private controlTails = new Map<string, Promise<void>>();
+  private memoryUploadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private memoryUploadCache = new Map<string, string>();
   private replySeq = 0;
   private binDir: string;
   private dataDir: string;
@@ -84,6 +92,8 @@ export class AgentManager {
   private idleMs: number;
   private runtimeResolver: (name: string) => Runtime | null;
   private beforeRuntimeDelivery: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
+  private machineId?: string;
+  private memoryUploadDebounceMs: number;
   private budget: ResourceBudget;
   private startQueue: QueuedStart[] = [];
   private log = createLogger("daemon:agents");
@@ -98,6 +108,8 @@ export class AgentManager {
     this.idleMs = opts.idleMs ?? IDLE_MS;
     this.runtimeResolver = opts.runtimeResolver ?? getRuntime;
     this.beforeRuntimeDelivery = opts.beforeRuntimeDelivery ?? (async () => {});
+    this.machineId = opts.machineId;
+    this.memoryUploadDebounceMs = opts.memoryUploadDebounceMs ?? MEMORY_UPLOAD_DEBOUNCE_MS;
     // Memory pressure monitor: every 10s, cap running agents if free < 500 MB
     const pressureTimer = setInterval(() => this.checkMemoryPressure(), 10_000);
     pressureTimer.unref?.();
@@ -277,6 +289,11 @@ export class AgentManager {
     // calls tryDequeue(), which would otherwise launch the queued item mid-reset.)
     this.startQueue = this.startQueue.filter((q) => q.agentId !== agentId);
     this.budget.queueLength = this.startQueue.length;
+    // Cancel any pending memory upload and drop the digest cache: the workspace was just reset, so
+    // the next turn end must re-upload the on-disk (post-reset) snapshot from scratch.
+    const pendingMemoryTimer = this.memoryUploadTimers.get(agentId);
+    if (pendingMemoryTimer) { clearTimeout(pendingMemoryTimer); this.memoryUploadTimers.delete(agentId); }
+    this.memoryUploadCache.delete(agentId);
     // Snapshot the scopes the daemon knows about before teardown removes them: each gets its own
     // null session uplink (the server clears that agent_sessions row); the scope-less legacy null
     // below clears agents.session_id (old column / mixed-fleet compat).
@@ -341,6 +358,28 @@ export class AgentManager {
     const r = this.agents.get(key); if (!r) return;
     if (r.idleTimer) clearTimeout(r.idleTimer);
     r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs }); void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, this.idleMs);
+  }
+
+  /** Debounced managed-memory uplink: every turn end (any scope) re-arms one agent-granular timer, so
+   *  a burst of scope turns collapses into a single read+upload, and unchanged snapshots are dropped
+   *  by digest comparison against the last upload. */
+  private scheduleMemoryUpload(agentId: string): void {
+    const existing = this.memoryUploadTimers.get(agentId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.memoryUploadTimers.delete(agentId);
+      void this.uploadMemory(agentId).catch((error) => this.log.warn("memory upload failed", { agentId, detail: String(error) }));
+    }, this.memoryUploadDebounceMs);
+    timer.unref?.();
+    this.memoryUploadTimers.set(agentId, timer);
+  }
+
+  private async uploadMemory(agentId: string): Promise<void> {
+    const files = await readManagedMemoryFiles(path.join(this.dataDir, agentId));
+    const digest = memoryFilesDigest(files);
+    if (this.memoryUploadCache.get(agentId) === digest) return; // unchanged since the last upload
+    this.memoryUploadCache.set(agentId, digest);
+    this.send({ type: "agent:memory", agentId, files, machineId: this.machineId });
   }
 
   private startReplyPreview(key: string, r: Running, channelId: string, streamId?: string): void {
@@ -500,6 +539,7 @@ export class AgentManager {
       if (this.agents.get(key) !== running || !running.turnActive) return;
       running.turnActive = false;
       this.startNextQueuedDelivery(key, running);
+      this.scheduleMemoryUpload(agentId);
     };
     const completeFailedTurn = (turnIdentity: object) => {
       if (completedFailureTurns.has(turnIdentity)) return;

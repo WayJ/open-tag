@@ -1,5 +1,5 @@
 import { constants, lstatSync, mkdirSync, openSync, closeSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 function contained(root: string, target: string): boolean {
@@ -131,4 +131,30 @@ export async function readManagedFile(root: string, relativePath: string, maxByt
     return await handle.readFile();
   }
   finally { await handle.close(); }
+}
+
+// The notes filename shape mirrors daemonProtocol's whitelist regex (`notes/[A-Za-z0-9_.\-]+\.md`,
+// unexported there by design) so the daemon only ever reads entries the server would accept —
+// an odd-named local file is skipped rather than poisoning the whole snapshot.
+const MEMORY_NOTE_NAME_RE = /^[A-Za-z0-9_.\-]+\.md$/;
+
+/** Read an agent's managed-memory whitelist (MEMORY.md / personality.md / notes/*.md) from its
+ *  workspace root. Missing or unreadable entries are simply absent from the result — the snapshot
+ *  is whatever of the whitelist actually exists. Every read goes through `readManagedFile`, so
+ *  symlinked entries are rejected, never followed. */
+export async function readManagedMemoryFiles(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const readIfPresent = async (relativePath: string): Promise<void> => {
+    try { files[relativePath] = (await readManagedFile(root, relativePath)).toString("utf8"); }
+    catch { /* absent (or unsafe) → not part of the snapshot */ }
+  };
+  await readIfPresent("MEMORY.md");
+  await readIfPresent("personality.md");
+  try {
+    const entries = await readdir(path.join(root, "notes"), { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && MEMORY_NOTE_NAME_RE.test(entry.name)) await readIfPresent(`notes/${entry.name}`);
+    }
+  } catch { /* no notes directory → nothing to enumerate */ }
+  return files;
 }

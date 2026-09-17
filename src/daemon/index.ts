@@ -77,7 +77,7 @@ function settleDeliveryCommit(deliveryId: unknown, error?: unknown): void {
   else waiter.resolve();
 }
 
-const mgr = new AgentManager((m) => conn.send(m), { beforeRuntimeDelivery: requestDeliveryCommit });
+const mgr = new AgentManager((m) => conn.send(m), { beforeRuntimeDelivery: requestDeliveryCommit, machineId: readMachineId() });
 
 function runAgentControl(msg: any, operation: () => void | Promise<void>): void {
   void mgr.runControl(msg.agentId, operation).then(
