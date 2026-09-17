@@ -21,15 +21,26 @@ const DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_DELIVER_DEBOUNCE_MS ?? 3
 const ONE_SHOT_DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_ONE_SHOT_DELIVER_DEBOUNCE_MS ?? process.env.OPEN_TAG_HERMES_DELIVER_DEBOUNCE_MS ?? 500); // One-shot runtimes need a short fixed wait when there is only one live notice.
 const PENDING_DELIVER_TTL_MS = Number(process.env.OPEN_TAG_PENDING_DELIVER_TTL_MS ?? 15_000); // start+deliver can arrive back-to-back; keep deliver briefly while start prepares workspace
 
+/** Session scope carried in the daemon protocol: one persistent runtime session per (agent, channel|thread). */
+export interface AgentScope { type: "channel" | "thread"; id: string; sessionId: string | null }
+
+/** Internal map key for one running (agent, scope) instance. No scope → LEGACY key (`aid:legacy`).
+ *  agentIds are uuids without colons, so `key.split(":")[0]` always recovers the agentId. */
+export function scopeKey(agentId: string, scope?: Pick<AgentScope, "type" | "id"> | null): string {
+  return scope ? `${agentId}:${scope.type}:${scope.id}` : `${agentId}:legacy`;
+}
+function agentIdOf(key: string): string { return key.split(":")[0]!; }
+
 export interface AgentConfig {
   name: string; displayName: string; description?: string | null;
   model?: string; runtime?: string; projectPath?: string | null; runtimeConfig?: Record<string, unknown> | null; sessionId?: string;
+  scope?: AgentScope; // injected by the server on agent:start; absent → LEGACY single-session behavior
   serverUrl: string; serverId: string; agentId: string; agentToken?: string; // per-agent token (slice10); re-sent start for a running agent may omit it (daemon ignores)
 }
 interface DeliveryAdmission { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; }
 interface LifecycleSettlement { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; settled: boolean; }
 interface DeliverBuf { count: number; from: string; target: string; targetName: string; firstShort: string; latestShort: string; isTask: boolean; mentioned: boolean; targets: Set<string>; timer: ReturnType<typeof setTimeout>; admissions: DeliveryAdmission[]; streamId?: string; attention?: string; deliveryId?: string; seq?: number; }
-export interface DeliverMeta { targetName?: string; msgShort?: string; isTask?: boolean; streamId?: string; turnId?: string; turnMessageCount?: number; attention?: string; deliveryId?: string; seq?: number; }
+export interface DeliverMeta { targetName?: string; msgShort?: string; isTask?: boolean; streamId?: string; turnId?: string; turnMessageCount?: number; attention?: string; deliveryId?: string; seq?: number; scope?: AgentScope; }
 interface Running { session: RuntimeSession; config: AgentConfig; sessionId: string | null; initialAdmission: LifecycleSettlement; exit: LifecycleSettlement; idleTimer?: ReturnType<typeof setTimeout>; deliverBufs?: Map<string, DeliverBuf>; deliveryQueue?: DeliverBuf[]; turnActive: boolean; pid: number; }
 interface QueuedStart { agentId: string; config: AgentConfig; enqueuedAt: number; }
 interface PendingDeliver { from: string; target: string; mentioned: boolean; meta: DeliverMeta; admission: DeliveryAdmission; }
@@ -114,8 +125,9 @@ export class AgentManager {
       }
       if (maxId) {
         const config = this.agents.get(maxId)?.config;
-        if (config && !this.startQueue.some((q) => q.agentId === maxId)) {
-          this.startQueue.push({ agentId: maxId, config, enqueuedAt: Date.now() });
+        const maxAgentId = agentIdOf(maxId);
+        if (config && !this.startQueue.some((q) => q.agentId === maxAgentId)) {
+          this.startQueue.push({ agentId: maxAgentId, config, enqueuedAt: Date.now() });
         }
         this.budget.queueLength = this.startQueue.length;
         this.log.warn("darwin: sleeping heaviest agent to relieve memory pressure", { agentId: maxId, rssMB: maxRss });
@@ -124,7 +136,8 @@ export class AgentManager {
     }
   }
 
-  running(): string[] { return [...this.agents.keys()]; }
+  /** Agent ids currently running (one agent may run several scope-keyed runtimes). */
+  running(): string[] { return [...new Set([...this.agents.keys()].map(agentIdOf))]; }
 
   /** Serialize lifecycle commands for one agent while keeping different agents independent. */
   runControl<T>(agentId: string, operation: () => T | Promise<T>): Promise<T> {
@@ -138,7 +151,7 @@ export class AgentManager {
     return current;
   }
 
-  stopAll(): void { for (const id of new Set([...this.agents.keys(), ...this.starting.keys()])) void this.stop(id).catch(() => {}); }
+  stopAll(): void { for (const id of new Set([...this.agents.keys(), ...this.starting.keys()].map(agentIdOf))) void this.stop(id).catch(() => {}); }
   budgetStatus() {
     let actualMemMB = 0;
     for (const r of this.agents.values()) {
@@ -164,32 +177,47 @@ export class AgentManager {
     this.log.info("dequeued", { agentId });
   }
 
-  // Tear down process: clear timers + remove from map first (critical: deletion before session.stop() lets the onExit has() guard recognize this as an intentional stop, suppressing unexpected sleeping status) + stop runtime. Returns whether the agent was found.
-  private async teardown(agentId: string): Promise<boolean> {
+  /** Scope keys for an id that may be a raw agentId (all scopes) or an exact scope key (that scope only). */
+  private runningKeys(idOrKey: string): string[] {
+    if (this.agents.has(idOrKey)) return [idOrKey];
+    return [...this.agents.keys()].filter((k) => agentIdOf(k) === idOrKey);
+  }
+
+  // Tear down process: clear timers + remove from map first (critical: deletion before session.stop() lets the onExit has() guard recognize this as an intentional stop, suppressing unexpected sleeping status) + stop runtime. Accepts an agentId (tears down every scope) or an exact scope key. Returns whether anything was found.
+  private async teardown(idOrKey: string): Promise<boolean> {
+    const agentId = agentIdOf(idOrKey);
     const error = new Error(`agent stopped before delivery admission: ${agentId}`);
     this.invalidateDeliveryLifecycle(agentId, error);
     const attempt = this.starting.get(agentId);
     if (attempt) attempt.cancelled = true;
     this.rejectPendingDeliver(agentId, error);
-    const r = this.agents.get(agentId);
-    if (!r) {
+    const keys = this.runningKeys(idOrKey);
+    if (!keys.length) {
       if (attempt) await attempt.promise.catch(() => {});
       return !!attempt;
     }
-    this.finishReplyPreview(agentId);
-    if (r.idleTimer) clearTimeout(r.idleTimer);
-    this.rejectBufferedDeliveries(r, error);
-    this.agents.delete(agentId);
+    const runnings: Running[] = [];
+    for (const key of keys) {
+      const r = this.agents.get(key);
+      if (!r) continue;
+      runnings.push(r);
+      this.finishReplyPreview(key);
+      if (r.idleTimer) clearTimeout(r.idleTimer);
+      this.rejectBufferedDeliveries(r, error);
+      this.agents.delete(key);
+    }
+    // Dequeue before stopping (tryDequeue must observe freed capacity synchronously, before any await).
     this.tryDequeue();
-    r.session.stop();
-    await r.exit.promise;
+    // Stop every scope first, then wait: a zombie scope-A process must not delay scope-B's stop.
+    for (const r of runnings) r.session.stop();
+    for (const r of runnings) await r.exit.promise;
     if (attempt) await attempt.promise.catch(() => {});
     return true;
   }
-  // User-initiated stop: emits inactive/offline
-  async stop(agentId: string): Promise<void> { if (!await this.teardown(agentId)) return; this.send({ type: "agent:status", agentId, status: "inactive" }); this.sendAgentActivity(agentId, "offline"); }
+  // User-initiated stop (agentId or one scope key): emits inactive/offline
+  async stop(idOrKey: string): Promise<void> { if (!await this.teardown(idOrKey)) return; this.send({ type: "agent:status", agentId: agentIdOf(idOrKey), status: "inactive" }); this.sendAgentActivity(idOrKey, "offline"); }
   // Idle sleep: emits sleeping/sleeping (activity also set to sleeping so the frontend activity+status dual mapping stays consistent; session is preserved for --resume on next wake)
-  async sleep(agentId: string): Promise<void> { if (!await this.teardown(agentId)) return; this.log.info("sleep", { agentId }); this.send({ type: "agent:status", agentId, status: "sleeping" }); this.sendAgentActivity(agentId, "sleeping"); }
+  async sleep(idOrKey: string): Promise<void> { if (!await this.teardown(idOrKey)) return; this.log.info("sleep", { agentId: agentIdOf(idOrKey) }); this.send({ type: "agent:status", agentId: agentIdOf(idOrKey), status: "sleeping" }); this.sendAgentActivity(idOrKey, "sleeping"); }
   /** Try to start the next queued agent if budget allows. */
   private tryDequeue(): void {
     if (this.startQueue.length === 0) return;
@@ -200,7 +228,7 @@ export class AgentManager {
     this.budget.queueLength = this.startQueue.length;
     this.log.info("dequeue -> start", { agentId });
     this.send({ type: "agent:status", agentId, status: "inactive" });
-    void this.launchStart(agentId, q.config).catch(() => {});
+    void this.launchStart(agentId, scopeKey(agentId, q.config.scope), q.config).catch(() => {});
   }
 
   /** Reset: stop the process + clear the server-side session (next start will not --resume); wipeWorkspace deletes the entire workspace; clearMemory clears MEMORY.md only. */
@@ -250,61 +278,67 @@ export class AgentManager {
       try { await atomicWriteManagedFile(dir, "MEMORY.md", next); this.log.info("profile synced to MEMORY.md", { agentId }); }
       catch (e) { this.log.warn("syncProfile write failed", { agentId, detail: String(e) }); return; }
     }
-    // Keep a running agent's cached config fresh so a later --resume uses the new values.
-    const r = this.agents.get(agentId);
-    if (r) { r.config.displayName = displayName; r.config.description = description ?? null; }
+    // Keep any running scope's cached config fresh so a later --resume uses the new values.
+    for (const key of this.runningKeys(agentId)) {
+      const r = this.agents.get(key)!;
+      r.config.displayName = displayName; r.config.description = description ?? null;
+    }
   }
-  private resetIdle(agentId: string): void {
-    const r = this.agents.get(agentId); if (!r) return;
+  private resetIdle(key: string): void {
+    const r = this.agents.get(key); if (!r) return;
     if (r.idleTimer) clearTimeout(r.idleTimer);
-    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId, idleMs: IDLE_MS }); void this.sleep(agentId).catch((error) => this.log.warn("idle sleep failed", { agentId, detail: String(error) })); }, IDLE_MS);
+    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), idleMs: IDLE_MS }); void this.sleep(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, IDLE_MS);
   }
 
-  private startReplyPreview(agentId: string, r: Running, channelId: string, streamId?: string): void {
-    const existing = this.activeReplyPreviews.get(agentId);
+  private startReplyPreview(key: string, r: Running, channelId: string, streamId?: string): void {
+    const existing = this.activeReplyPreviews.get(key);
     if (existing?.channelId === channelId && (!streamId || existing.streamId === streamId)) return;
     const preview: ActiveReplyPreview = {
       channelId,
       streamId: streamId ?? `${Date.now()}-${++this.replySeq}`,
-      name: r.config.displayName || r.config.name || agentId,
+      name: r.config.displayName || r.config.name || agentIdOf(key),
       eventSeq: 0,
     };
     if (existing) return;
-    this.activeReplyPreviews.set(agentId, preview);
-    this.send({ type: "agent:reply", agentId, channelId: preview.channelId, streamId: preview.streamId, name: preview.name, op: "start" });
+    this.activeReplyPreviews.set(key, preview);
+    this.send({ type: "agent:reply", agentId: agentIdOf(key), channelId: preview.channelId, streamId: preview.streamId, name: preview.name, op: "start" });
   }
 
-  private sendAgentActivity(agentId: string, activity: string, detail = ""): void {
-    const preview = this.activeReplyPreviews.get(agentId);
-    this.send({ type: "agent:activity", agentId, activity, detail, channelId: preview?.channelId, streamId: preview?.streamId, runSeq: preview ? ++preview.eventSeq : undefined });
+  private sendAgentActivity(key: string, activity: string, detail = ""): void {
+    const preview = this.activeReplyPreviews.get(key);
+    this.send({ type: "agent:activity", agentId: agentIdOf(key), activity, detail, channelId: preview?.channelId, streamId: preview?.streamId, runSeq: preview ? ++preview.eventSeq : undefined });
   }
 
-  private sendAgentTrajectory(agentId: string, entries: { kind?: string; text?: string; toolName?: string; toolInput?: string }[]): void {
-    const preview = this.activeReplyPreviews.get(agentId);
+  private sendAgentTrajectory(key: string, entries: { kind?: string; text?: string; toolName?: string; toolInput?: string }[]): void {
+    const preview = this.activeReplyPreviews.get(key);
     const contextual = preview ? entries.map((entry) => ({ ...entry, runSeq: ++preview.eventSeq })) : entries;
-    this.send({ type: "agent:trajectory", agentId, entries: contextual, channelId: preview?.channelId, streamId: preview?.streamId });
+    this.send({ type: "agent:trajectory", agentId: agentIdOf(key), entries: contextual, channelId: preview?.channelId, streamId: preview?.streamId });
   }
 
-  private finishReplyPreview(agentId: string, op: "done" | "error" = "done"): void {
-    const preview = this.activeReplyPreviews.get(agentId);
+  private finishReplyPreview(key: string, op: "done" | "error" = "done"): void {
+    const preview = this.activeReplyPreviews.get(key);
     if (!preview) return;
-    this.activeReplyPreviews.delete(agentId);
-    this.send({ type: "agent:reply", agentId, channelId: preview.channelId, streamId: preview.streamId, name: preview.name, op });
-    const running = this.agents.get(agentId);
+    this.activeReplyPreviews.delete(key);
+    this.send({ type: "agent:reply", agentId: agentIdOf(key), channelId: preview.channelId, streamId: preview.streamId, name: preview.name, op });
+    const running = this.agents.get(key);
     // Queue is waiting → sleep this agent so the next one can run
     if (op === "done" && !running?.deliveryQueue?.length && !running?.deliverBufs?.size && this.startQueue.length > 0) {
-      const r = this.agents.get(agentId);
+      const r = this.agents.get(key);
       if (r) {
-        this.log.info("reply done, queue waiting — sleeping agent", { agentId });
-        void this.sleep(agentId).catch((error) => this.log.warn("queued-agent sleep failed", { agentId, detail: String(error) }));
+        this.log.info("reply done, queue waiting — sleeping agent", { agentId: agentIdOf(key) });
+        void this.sleep(key).catch((error) => this.log.warn("queued-agent sleep failed", { agentId: agentIdOf(key), detail: String(error) }));
       }
     }
   }
 
   async start(agentId: string, config: AgentConfig): Promise<void> {
+    const key = scopeKey(agentId, config.scope);
+    // `starting`/startQueue remain agentId-granular (Task 5 migrates them): a concurrent same-agent
+    // different-scope start joins this attempt instead of spawning, and a queued start's config can
+    // be overwritten by whichever scope's start lands last.
     const existing = this.starting.get(agentId);
     if (existing) return existing.promise;
-    if (this.agents.has(agentId)) return;
+    if (this.agents.has(key)) return;
     // Already queued — update config and return
     if (this.startQueue.some((q) => q.agentId === agentId)) {
       const idx = this.startQueue.findIndex((q) => q.agentId === agentId);
@@ -313,7 +347,7 @@ export class AgentManager {
     }
 
     if (this.budget.tryAllocate()) {
-      return this.launchStart(agentId, config);
+      return this.launchStart(agentId, key, config);
     }
 
     // Memory pressure → queue
@@ -324,12 +358,12 @@ export class AgentManager {
     this.log.info("queued (memory pressure)", { agentId });
   }
 
-  private launchStart(agentId: string, config: AgentConfig): Promise<void> {
+  private launchStart(agentId: string, key: string, config: AgentConfig): Promise<void> {
     const attempt: StartAttempt = { promise: undefined as unknown as Promise<void>, cancelled: false };
     this.starting.set(agentId, attempt);
     attempt.promise = Promise.resolve()
-      .then(() => this.startNow(agentId, config, attempt))
-      .catch(async (error) => { await this.failStart(agentId, error); throw error; })
+      .then(() => this.startNow(agentId, key, config, attempt))
+      .catch(async (error) => { await this.failStart(key, agentId, error); throw error; })
       .finally(() => {
         if (this.starting.get(agentId) === attempt) this.starting.delete(agentId);
         this.budget.release();
@@ -342,9 +376,9 @@ export class AgentManager {
     if (attempt.cancelled || this.starting.get(agentId) !== attempt) throw new Error(`agent start cancelled: ${agentId}`);
   }
 
-  private async startNow(agentId: string, config: AgentConfig, attempt: StartAttempt): Promise<void> {
+  private async startNow(agentId: string, key: string, config: AgentConfig, attempt: StartAttempt): Promise<void> {
     this.assertStartActive(agentId, attempt);
-    if (this.agents.has(agentId)) return;
+    if (this.agents.has(key)) return;
     const runtime = this.runtimeResolver(config.runtime ?? "claude");
     if (!runtime) {
       this.log.error("no runtime", { runtime: config.runtime });
@@ -372,6 +406,9 @@ export class AgentManager {
     this.assertStartActive(agentId, attempt);
 
     const effectiveDescription = personality ?? config.description;
+    // Scoped runs chain onto the scope's own session; a fresh scope (sessionId null) must NOT fall
+    // back to the legacy agent-wide session. LEGACY (no scope) keeps the top-level sessionId.
+    const resumeSessionId = config.scope ? config.scope.sessionId ?? null : config.sessionId ?? null;
 
     const systemPrompt = buildSystemPrompt({
       name: config.name, displayName: config.displayName, description: effectiveDescription,
@@ -387,7 +424,7 @@ export class AgentManager {
     const running: Running = {
       session: undefined as unknown as RuntimeSession,
       config,
-      sessionId: config.sessionId ?? null,
+      sessionId: resumeSessionId,
       initialAdmission: this.createLifecycleSettlement(),
       exit: this.createLifecycleSettlement(),
       turnActive: true,
@@ -396,9 +433,9 @@ export class AgentManager {
     let initialAdmissionSettled = false;
     const completedFailureTurns = new WeakSet<object>();
     const completeTurn = () => {
-      if (this.agents.get(agentId) !== running || !running.turnActive) return;
+      if (this.agents.get(key) !== running || !running.turnActive) return;
       running.turnActive = false;
-      this.startNextQueuedDelivery(agentId, running);
+      this.startNextQueuedDelivery(key, running);
     };
     const completeFailedTurn = (turnIdentity: object) => {
       if (completedFailureTurns.has(turnIdentity)) return;
@@ -406,7 +443,10 @@ export class AgentManager {
       completeTurn();
     };
     const cb: RuntimeCallbacks = {
-      onSession: (sid) => { running.sessionId = sid; this.send({ type: "agent:session", agentId, sessionId: sid }); },
+      onSession: (sid) => {
+        running.sessionId = sid;
+        this.send({ type: "agent:session", agentId, sessionId: sid, ...(running.config.scope ? { scope: running.config.scope } : {}) });
+      },
       onInitialTurnAdmission: (error) => {
         if (initialAdmissionSettled) return;
         initialAdmissionSettled = true;
@@ -420,36 +460,36 @@ export class AgentManager {
       },
       onAcceptedTurnFailure: completeFailedTurn,
       onActivity: (activity, detail) => {
-        this.resetIdle(agentId);
-        this.sendAgentActivity(agentId, activity, detail ?? "");
+        this.resetIdle(key);
+        this.sendAgentActivity(key, activity, detail ?? "");
         if (activity === "online") {
-          this.finishReplyPreview(agentId);
+          this.finishReplyPreview(key);
           completeTurn();
         } else if (activity === "error") {
-          this.finishReplyPreview(agentId, "error");
+          this.finishReplyPreview(key, "error");
         } else if (activity === "sleeping" || activity === "offline") {
-          this.finishReplyPreview(agentId);
+          this.finishReplyPreview(key);
         }
       },
-      onTrajectory: (entries) => { this.sendAgentTrajectory(agentId, entries); },
+      onTrajectory: (entries) => { this.sendAgentTrajectory(key, entries); },
       onExit: (code) => {
-        this.log.info("agent exited", { agentId, code });
+        this.log.info("agent exited", { agentId, key, code });
         const exitError = new Error(`runtime exited before delivery admission (${code ?? "signal"})`);
         const startupError = new Error(`runtime exited before initial turn admission (${code ?? "signal"})`);
         running.exit.resolve();
         if (!running.initialAdmission.settled) running.initialAdmission.reject(startupError);
-        if (this.agents.get(agentId) !== running) return;
+        if (this.agents.get(key) !== running) return;
         this.invalidateDeliveryLifecycle(agentId, exitError);
         this.rejectPendingDeliver(agentId, exitError);
         this.rejectBufferedDeliveries(running, exitError);
-        this.agents.delete(agentId);
+        this.agents.delete(key);
         this.tryDequeue();
         // Process died on its own (not intentionally stopped): keep status=sleeping (session preserved, @ can --resume to recover);
         // Non-zero exit code (crash/signal kill) → activity=error to surface the failure; clean exit → sleeping.
         const crashed = code !== 0;
-        this.finishReplyPreview(agentId, crashed ? "error" : "done");
+        this.finishReplyPreview(key, crashed ? "error" : "done");
         this.send({ type: "agent:status", agentId, status: "sleeping" });
-        this.sendAgentActivity(agentId, crashed ? "error" : "sleeping", crashed ? `crashed (exit ${code ?? "signal"})` : "");
+        this.sendAgentActivity(key, crashed ? "error" : "sleeping", crashed ? `crashed (exit ${code ?? "signal"})` : "");
       },
       log: this.log,
     };
@@ -468,28 +508,28 @@ export class AgentManager {
     const startupDelivery = pendingDeliverItems[0];
     if (startupDelivery?.meta.deliveryId) await this.beforeRuntimeDelivery(agentId, startupDelivery.meta);
     this.assertStartActive(agentId, attempt);
-    this.agents.set(agentId, running);
-    if (startupDelivery) this.startReplyPreview(agentId, running, startupDelivery.target, startupDelivery.meta.streamId);
+    this.agents.set(key, running);
+    if (startupDelivery) this.startReplyPreview(key, running, startupDelivery.target, startupDelivery.meta.streamId);
     try {
       running.session = runtime.start({
-        cwd: projectDir, stateDir, model: config.model, runtimeConfig: config.runtimeConfig, sessionId: config.sessionId, systemPrompt, env,
-        initialPrompt: useOneShotWakeNudge ? ONE_SHOT_WAKE_NUDGE : (config.sessionId ? RESUME_NUDGE : STARTUP_NUDGE),
+        cwd: projectDir, stateDir, model: config.model, runtimeConfig: config.runtimeConfig, sessionId: resumeSessionId, systemPrompt, env,
+        initialPrompt: useOneShotWakeNudge ? ONE_SHOT_WAKE_NUDGE : (resumeSessionId ? RESUME_NUDGE : STARTUP_NUDGE),
       }, cb);
     } catch (cause) {
       running.exit.resolve();
-      if (this.agents.get(agentId) === running) this.agents.delete(agentId);
+      if (this.agents.get(key) === running) this.agents.delete(key);
       throw cause;
     }
     running.pid = running.session.pid ?? 0;
 
     await running.initialAdmission.promise;
     this.assertStartActive(agentId, attempt);
-    if (this.agents.get(agentId) !== running) throw new Error(`runtime exited before start completed: ${agentId}`);
+    if (this.agents.get(key) !== running) throw new Error(`runtime exited before start completed: ${agentId}`);
 
     this.send({ type: "agent:status", agentId, status: "active" });
-    if (running.turnActive) this.sendAgentActivity(agentId, "working", "starting");
-    this.log.info("agent started", { agentId, runtime: runtime.name, model: config.model ?? "(default)", resume: !!config.sessionId, experimental: runtime.experimental ?? false });
-    this.resetIdle(agentId);
+    if (running.turnActive) this.sendAgentActivity(key, "working", "starting");
+    this.log.info("agent started", { agentId, key, runtime: runtime.name, model: config.model ?? "(default)", resume: !!resumeSessionId, experimental: runtime.experimental ?? false });
+    this.resetIdle(key);
     if (pendingDeliveryCount > 0 && this.pendingDelivers.has(agentId)) {
       this.log.debug("pending delivery awaiting startup nudge admission", { agentId, runtime: runtime.name, count: pendingDeliveryCount });
     }
@@ -531,21 +571,21 @@ export class AgentManager {
     };
   }
 
-  private async failStart(agentId: string, cause: unknown): Promise<void> {
+  private async failStart(key: string, agentId: string, cause: unknown): Promise<void> {
     const error = cause instanceof Error ? cause : new Error(String(cause));
     // A cancelled start was already invalidated by stop/reset; preserve that more specific
     // lifecycle error for deliveries that were concurrently loading the persistent fence.
     if (!error.message.startsWith("agent start cancelled:")) this.invalidateDeliveryLifecycle(agentId, error);
-    const running = this.agents.get(agentId);
+    const running = this.agents.get(key);
     if (running?.idleTimer) clearTimeout(running.idleTimer);
     if (running) this.rejectBufferedDeliveries(running, error);
     if (running) {
-      this.agents.delete(agentId);
+      this.agents.delete(key);
       try { running.session?.stop(); } catch { /* preserve the original startup error */ }
       if (!running.session) running.exit.resolve();
       await running.exit.promise.catch(() => {});
     }
-    this.finishReplyPreview(agentId, "error");
+    this.finishReplyPreview(key, "error");
     this.rejectPendingDeliver(agentId, error);
     this.log.warn("agent start failed", { agentId, detail: String(error) });
   }
@@ -566,15 +606,16 @@ export class AgentManager {
     return inboxNotice({ count: buffer.count, from: buffer.from, targetName: buffer.targetName, firstShort: buffer.firstShort, latestShort: buffer.latestShort, isTask: buffer.isTask, isDm: buffer.targetName.startsWith("dm:"), changedTargets: buffer.targets.size, mentioned: buffer.mentioned, attention: buffer.attention });
   }
 
-  private startNextQueuedDelivery(agentId: string, running: Running): void {
-    if (running.turnActive || this.agents.get(agentId) !== running) return;
+  private startNextQueuedDelivery(key: string, running: Running): void {
+    if (running.turnActive || this.agents.get(key) !== running) return;
     const next = running.deliveryQueue?.shift();
     if (!running.deliveryQueue?.length) running.deliveryQueue = undefined;
-    if (next) void this.admitBufferedDelivery(agentId, running, next);
+    if (next) void this.admitBufferedDelivery(key, running, next);
   }
 
-  private async admitBufferedDelivery(agentId: string, running: Running, buffer: DeliverBuf): Promise<void> {
-    if (this.agents.get(agentId) !== running) {
+  private async admitBufferedDelivery(key: string, running: Running, buffer: DeliverBuf): Promise<void> {
+    const agentId = agentIdOf(key);
+    if (this.agents.get(key) !== running) {
       const error = new Error(`agent stopped before delivery admission: ${agentId}`);
       for (const admission of buffer.admissions) admission.reject(error);
       return;
@@ -582,18 +623,18 @@ export class AgentManager {
     running.turnActive = true;
     try {
       if (buffer.deliveryId) await this.beforeRuntimeDelivery(agentId, buffer);
-      this.startReplyPreview(agentId, running, buffer.target, buffer.streamId);
+      this.startReplyPreview(key, running, buffer.target, buffer.streamId);
       await running.session.deliver(this.deliveryNotice(buffer));
-      this.resetIdle(agentId);
+      this.resetIdle(key);
       for (const admission of buffer.admissions) admission.resolve();
       this.log.debug("inbox notice -> agent", { agentId, count: buffer.count, mentioned: buffer.mentioned });
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       running.turnActive = false;
       for (const admission of buffer.admissions) admission.reject(error);
-      this.finishReplyPreview(agentId, "error");
+      this.finishReplyPreview(key, "error");
       this.log.warn("deliver failed", { agentId, detail: String(error) });
-      this.startNextQueuedDelivery(agentId, running);
+      this.startNextQueuedDelivery(key, running);
     }
   }
 
@@ -740,7 +781,12 @@ export class AgentManager {
 
   private admitDelivery(agentId: string, from: string, target: string, mentioned: boolean, meta: DeliverMeta): Promise<void> {
     const admission = this.createAdmission();
-    const r = this.agents.get(agentId);
+    // Route by (agent, scope): a scoped deliver reaches only that scope's runtime. The `starting` /
+    // pendingDelivers fences below are still agentId-granular (Task 5 migrates them), so while a
+    // sibling scope of the same agent is starting, this deliver can be swallowed by that start's
+    // pending queue and consumed by its startup nudge instead of waiting for its own scope.
+    const key = scopeKey(agentId, meta.scope);
+    const r = this.agents.get(key);
     if (!r || this.starting.has(agentId)) {
       this.queuePendingDeliver(agentId, { from, target, mentioned, meta, admission });
       return admission.promise;
@@ -749,10 +795,10 @@ export class AgentManager {
     // here; legacy deliveries without a turn id retain the old per-agent batching behavior.
     const tname = meta.targetName ?? target;
     const short = meta.msgShort ?? "";
-    const key = meta.turnId ?? "legacy";
+    const turnKey = meta.turnId ?? "legacy";
     const buffers = r.deliverBufs ?? new Map<string, DeliverBuf>();
     r.deliverBufs = buffers;
-    const b = buffers.get(key);
+    const b = buffers.get(turnKey);
     if (b) { // accumulate: count++, update latest, keep first unchanged, union target set
       clearTimeout(b.timer); b.count = Math.max(b.count + 1, meta.turnMessageCount ?? 0); b.from = from; b.target = target; b.targetName = tname; b.latestShort = short;
       b.isTask = b.isTask || !!meta.isTask; b.mentioned = b.mentioned || mentioned; b.targets.add(tname); b.streamId = meta.streamId ?? b.streamId; b.attention = meta.attention ?? b.attention; b.deliveryId = meta.deliveryId ?? b.deliveryId; b.seq = meta.seq ?? b.seq;
@@ -760,7 +806,7 @@ export class AgentManager {
     const buf: DeliverBuf = b ?? { count: meta.turnMessageCount ?? 1, from, target, targetName: tname, firstShort: short, latestShort: short, isTask: !!meta.isTask, mentioned, targets: new Set([tname]), timer: undefined as any, admissions: [], streamId: meta.streamId, attention: meta.attention, deliveryId: meta.deliveryId, seq: meta.seq };
     buf.admissions.push(admission);
     buf.timer = setTimeout(() => void (async () => {
-      buffers.delete(key);
+      buffers.delete(turnKey);
       if (!buffers.size) r.deliverBufs = undefined;
       if (r.turnActive) {
         const queue = r.deliveryQueue ?? [];
@@ -769,9 +815,9 @@ export class AgentManager {
         this.log.debug("inbox notice queued behind active turn", { agentId, count: buf.count, queued: queue.length });
         return;
       }
-      await this.admitBufferedDelivery(agentId, r, buf);
+      await this.admitBufferedDelivery(key, r, buf);
     })(), meta.turnId ? 0 : this.debounceMsFor(r));
-    buffers.set(key, buf);
+    buffers.set(turnKey, buf);
     return admission.promise;
   }
 }
