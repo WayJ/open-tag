@@ -88,6 +88,7 @@ export function safeDownloadHeaders(storedMime: string, filename: string): Recor
     return {
       "content-type": storedMime,
       "content-disposition": `inline; filename*=UTF-8''${encodedName}`,
+      "referrer-policy": "no-referrer", // attachment URLs carry ?token= — never leak it as a referrer
       ...nosniff,
     };
   }
@@ -96,6 +97,7 @@ export function safeDownloadHeaders(storedMime: string, filename: string): Recor
       "content-type": storedMime,
       "content-disposition": `inline; filename*=UTF-8''${encodedName}`,
       "content-security-policy": SVG_SANDBOX_CSP,
+      "referrer-policy": "no-referrer", // same token-leak concern as tier 1/4
       ...nosniff,
     };
   }

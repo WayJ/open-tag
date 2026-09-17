@@ -139,6 +139,8 @@ test("safeDownloadHeaders: image/svg+xml → CSP sandbox (no same-origin script 
 test("safeDownloadHeaders: image/svg+xml → nosniff present", () => {
   const h = safeDownloadHeaders("image/svg+xml", "icon.svg");
   assert.equal(h["x-content-type-options"], "nosniff");
+  assert.equal(h["referrer-policy"], "no-referrer",
+    "tier 2 inline docs must not leak the ?token= query when their links are followed");
 });
 
 test("safeDownloadHeaders: text/xml → attachment", () => {
@@ -171,6 +173,8 @@ test("safeDownloadHeaders: image/jpeg → inline (safe for display)", () => {
   const h = safeDownloadHeaders("image/jpeg", "photo.jpg");
   assert.equal(h["content-type"], "image/jpeg");
   assert.match(h["content-disposition"], /^inline;/);
+  assert.equal(h["referrer-policy"], "no-referrer",
+    "tier 1 inline docs must not leak the ?token= query when their links are followed");
 });
 
 test("safeDownloadHeaders: image/png → inline", () => {
