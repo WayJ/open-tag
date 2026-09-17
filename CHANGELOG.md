@@ -20,6 +20,17 @@ from `main`; see commit history for fine-grained server/web changes.
   via the CLI (`artifact publish|list|versions`); re-publishing the same name in a
   channel appends a new version, and message cards show the artifact name/version/
   description.
+- **Agent memory sync**: turn-end debounced upload of the agent's whitelisted managed-memory
+  files (`MEMORY.md` / `personality.md` / `notes/*.md`) to a per-agent server snapshot (new
+  `agent_memory` jsonb row), with the canonical sha256 digest computed in the shared
+  `daemonProtocol.ts` so both planes can never drift on snapshot identity. On agent start a
+  three-state restore runs before seeding: empty local workspace → server snapshot restored in
+  place; digests match → skip; divergent server memory → imported one-shot to
+  `notes/imported/<stamp>.md` for the agent itself to merge (local whitelist files are never
+  overwritten). The hot dispatch path carries the digest only (`agentConfig.memoryDigest`);
+  the full snapshot moves on demand via the `memory:get` / `memory:data` RPC — the first
+  daemon-initiated RPC (an old server silently drops it; the daemon's timeout fallback treats
+  the restore as "no server row").
 
 ## [0.15.1] — 2026-09-17
 
