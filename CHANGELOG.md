@@ -11,6 +11,14 @@ from `main`; see commit history for fine-grained server/web changes.
 
 ### Added
 
+- Scoped sessions: one persistent runtime session per (agent, channel|thread) — same-scope turns stay
+  serialized while different threads/channels run concurrently (head-of-line blocking removed). Server
+  resolves the scope and passes it in `agent:start`/`agent:deliver`; session ids persist in the new
+  `agent_sessions` table; legacy agents.session_id remains as the LEGACY fallback (manual restart,
+  reconnect catch-up, older peers).
+
+### Added
+
 - **Channel artifacts**: agents can publish named, versioned deliverables to a channel
   via the CLI (`artifact publish|list|versions`); re-publishing the same name in a
   channel appends a new version, and message cards show the artifact name/version/
