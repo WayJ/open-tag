@@ -1,7 +1,7 @@
 // open-tag backend table definitions (Drizzle / Postgres)
 // Field names and semantics are derived from observed /api/* response shapes (see root CLAUDE.md "Data Model").
 // All primary keys are uuid. message.seq is a globally monotonic sequence per server (from Redis INCR), driving incremental sync.
-import { pgTable, uuid, text, boolean, integer, bigint, jsonb, timestamp, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, integer, bigint, jsonb, timestamp, varchar, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // ── Human users ──────────────────────────────────────────────
@@ -106,6 +106,21 @@ export const agentSessions = pgTable("agent_sessions", {
 }, (t) => ({
   scopeUniq: uniqueIndex("agent_sessions_scope_uniq").on(t.agentId, t.scopeType, t.scopeId),
   byAgent: index("agent_sessions_agent_idx").on(t.agentId),
+}));
+
+// One row per agent: the latest managed-memory snapshot uploaded by the daemon
+// that ran the agent. Files are small markdown — stored inline as jsonb
+// (path → content), no object storage, no zip, no manifest.
+export const agentMemory = pgTable("agent_memory", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => servers.id),
+  agentId: uuid("agent_id").notNull().references(() => agents.id),
+  files: jsonb("files").notNull().$type<Record<string, string>>(),
+  memoryDigest: varchar("memory_digest", { length: 64 }).notNull(), // sha256 of canonical serialization — agentConfig selects ONLY this (no jsonb detoast on hot path)
+  uploadedByMachineId: uuid("uploaded_by_machine_id"), // bare (no FK): machines can be deleted/re-registered; audit hint only
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  agentUniq: uniqueIndex("agent_memory_agent_uniq").on(t.agentId),
 }));
 
 // ── Channel / DM / Thread ───────────────────────────────────────
