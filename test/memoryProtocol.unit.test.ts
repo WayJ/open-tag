@@ -79,6 +79,11 @@ test("validateMemoryFiles rejects non-whitelisted root-level names", () => {
   assert.equal(validateMemoryFiles({ "README.md": "x" }).ok, false);
 });
 
+test("validateMemoryFiles rejects non-ASCII subdirectory / file names", () => {
+  assert.equal(validateMemoryFiles({ "notes/笔记.md": "x" }).ok, false);
+  assert.equal(validateMemoryFiles({ "notes/café.md": "x" }).ok, false);
+});
+
 test("validateMemoryFiles rejects total size above 512KB", () => {
   const big = "x".repeat(300 * 1024);
   const r = validateMemoryFiles({ "MEMORY.md": big, "personality.md": big });

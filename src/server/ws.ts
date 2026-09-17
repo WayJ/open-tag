@@ -7,7 +7,7 @@ import { BOOTSTRAP_KEY, hashToken, safeEqual } from "./auth.js";
 import { conversationTurnDeliveryBlockReason, registerDaemon, registerDaemonCapabilities, unregisterDaemon, resolveDaemonRequest, registerMachineConn, unregisterMachineConn, isCurrentMachineConn } from "./daemonHub.js";
 import { publish } from "./realtime.js";
 import { createLogger } from "../log.js";
-import { MACHINE_REJECTED_CODE } from "../daemonProtocol.js";
+import { MACHINE_REJECTED_CODE, memoryFilesDigest, validateMemoryFiles } from "../daemonProtocol.js";
 import { catchUpAgentsOnMachine } from "./reconnectCatchup.js";
 import { markMachineAgentsOffline } from "./machineLiveness.js";
 import { ACTIVITY_LOG_CAP, logActivity, pruneAgentActivityLog, startAgentActivityRun } from "./agentActivity.js";
@@ -126,6 +126,8 @@ async function onDaemon(ws: WebSocket, key: string): Promise<void> {
         }
       }
       else if (msg.type === "agent:session" && msg.agentId) await handleAgentSessionUplink(serverId!, msg);
+      else if (msg.type === "agent:memory" && msg.agentId) await handleAgentMemoryUplink(serverId!, machineId, msg);
+      else if (msg.type === "memory:get") await handleMemoryGet(serverId!, msg, ws);
       else if (msg.type === "agent:trajectory" && msg.agentId) {
         const a = (await db.select().from(schema.agents).where(eq(schema.agents.id, msg.agentId)))[0];
         await publish(serverId!, { type: "trajectory", agentId: msg.agentId, channelId: msg.channelId, name: a?.name, entries: msg.entries ?? [] });
@@ -243,6 +245,57 @@ export async function handleAgentSessionUplink(serverId: string, msg: any): Prom
     await db.update(schema.agents).set({ sessionId: msg.sessionId }).where(eq(schema.agents.id, msg.agentId));
   }
   await publish(serverId, { type: "agent:session", agentId: msg.agentId, sessionId: msg.sessionId, ...(scope ? { scope } : {}) }); // forward to the frontend
+}
+
+/** daemon → server managed-memory snapshot uplink ("agent:memory"). One row per agent: the latest
+ *  snapshot, with a digest computed by THIS side via the shared daemonProtocol (both planes run the
+ *  same canonical serialization — a single digest equality later decides pull/push/skip). An uplink
+ *  naming an agent that does not belong to this connection's server is dropped (tenant guard), as
+ *  is any snapshot failing the shared whitelist/size validation. Old daemons never send this — a
+ *  missing uplink simply means no row, which the daemon reads back as "no server snapshot". */
+export async function handleAgentMemoryUplink(serverId: string, machineId: string | null, msg: any): Promise<void> {
+  const agentId = typeof msg.agentId === "string" ? msg.agentId : "";
+  if (!agentId || !msg.files || typeof msg.files !== "object" || Array.isArray(msg.files)) return;
+  const files = msg.files as Record<string, string>;
+  // Tenant guard: the agent must live on the server this daemon connection authenticated to.
+  const agent = (await db.select({ id: schema.agents.id }).from(schema.agents).where(and(
+    eq(schema.agents.id, agentId),
+    eq(schema.agents.serverId, serverId),
+  )))[0];
+  if (!agent) { log.warn("agent:memory dropped: agent is not on this server", { agentId, serverId }); return; }
+  const verdict = validateMemoryFiles(files);
+  if (!verdict.ok) { log.warn("agent:memory dropped: invalid snapshot", { agentId, reason: verdict.reason }); return; }
+  const digest = memoryFilesDigest(files);
+  await db.insert(schema.agentMemory).values({
+    serverId, agentId, files, memoryDigest: digest, uploadedByMachineId: machineId, updatedAt: new Date(),
+  }).onConflictDoUpdate({
+    target: schema.agentMemory.agentId,
+    set: { files, memoryDigest: digest, uploadedByMachineId: machineId, updatedAt: new Date() },
+  });
+}
+
+/** daemon → server managed-memory fetch ("memory:get") — the first daemon-initiated RPC. ALWAYS
+ *  answers one memory:data {requestId, files} frame on the same connection: the stored snapshot
+ *  when the agent has a row on this server, otherwise files={} — a cross-tenant agentId is
+ *  indistinguishable from "no row", so another server's snapshot existence never leaks. */
+export async function handleMemoryGet(serverId: string, msg: any, ws: { send(data: string): void }): Promise<void> {
+  const requestId = typeof msg.requestId === "string" ? msg.requestId : "";
+  const agentId = typeof msg.agentId === "string" ? msg.agentId : "";
+  let files: Record<string, string> = {};
+  if (requestId && agentId) {
+    // Same tenant guard shape as the uplink: the agent must belong to this connection's server
+    // (join, not just the row's serverId, so a mismatched row can never be served).
+    const row = (await db.select({ files: schema.agentMemory.files })
+      .from(schema.agentMemory)
+      .innerJoin(schema.agents, eq(schema.agents.id, schema.agentMemory.agentId))
+      .where(and(
+        eq(schema.agentMemory.agentId, agentId),
+        eq(schema.agentMemory.serverId, serverId),
+        eq(schema.agents.serverId, serverId),
+      )))[0];
+    if (row) files = row.files;
+  }
+  try { ws.send(JSON.stringify({ type: "memory:data", requestId, files })); } catch { /* conn closing */ }
 }
 
 async function onAgentUpdate(serverId: string, msg: any): Promise<void> {
