@@ -87,6 +87,11 @@ function AttCard({ a, url }: { a: Att; url: string }) {
   const [lb, setLb] = useState(false);
   const [vErr, setVErr] = useState(false);
   const [pv, setPv] = useState(false);
+  const label = a.artifactName || undefined;
+  // Desc lives INSIDE the grow span (a block child after the label) so it stacks as a real second line and
+  // ellipsizes within the card; the vN badge stays a flex sibling next to the name row.
+  const desc = label && a.artifactDescription && <span className="msg-att-desc">{a.artifactDescription}</span>;
+  const ver = label && a.artifactVersion != null && <span className="msg-att-ver">v{a.artifactVersion}</span>;
   if (isImage(a.mimeType)) return (<>
     <button className="msg-att-img" title={a.filename} onClick={() => setLb(true)}><img src={url} alt={a.filename} loading="lazy" /></button>
     {lb && <Lightbox src={url} alt={a.filename} onClose={() => setLb(false)} />}
@@ -94,17 +99,17 @@ function AttCard({ a, url }: { a: Att; url: string }) {
   if (isVideo(a.mimeType) && !vErr) return <video className="msg-att-video" src={url} controls playsInline preload="metadata" title={a.filename} onError={() => setVErr(true)} />;
   if (isHtmlDoc(a.mimeType)) return (<>
     <a className="msg-att" href={url} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); setPv(true); }} title={a.filename}>
-      <IconFile size={14} /><span className="grow">{a.filename}</span><span className="asz">{fmtSize(a.sizeBytes)}</span>
+      <IconFile size={14} /><span className="grow">{label ?? a.filename}{desc}</span>{ver}<span className="asz">{fmtSize(a.sizeBytes)}</span>
     </a>
-    {pv && <AttPreview url={url} filename={a.filename} onClose={() => setPv(false)} />}
+    {pv && <AttPreview url={url} filename={a.filename} label={label} onClose={() => setPv(false)} />}
   </>);
   if (isMarkdownDoc(a.mimeType, a.filename)) return (<>
     <a className="msg-att" href={url} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); setPv(true); }} title={a.filename}>
-      <IconFile size={14} /><span className="grow">{a.filename}</span><span className="asz">{fmtSize(a.sizeBytes)}</span>
+      <IconFile size={14} /><span className="grow">{label ?? a.filename}{desc}</span>{ver}<span className="asz">{fmtSize(a.sizeBytes)}</span>
     </a>
-    {pv && <AttMdPreview url={url} filename={a.filename} onClose={() => setPv(false)} />}
+    {pv && <AttMdPreview url={url} filename={a.filename} label={label} onClose={() => setPv(false)} />}
   </>);
-  return <a className="msg-att" href={url} target="_blank" rel="noreferrer"><IconFile size={14} /><span className="grow">{a.filename}{vErr ? i18n.t("chat.videoUnsupported") : ""}</span><span className="asz">{fmtSize(a.sizeBytes)}</span></a>;
+  return <a className="msg-att" href={url} target="_blank" rel="noreferrer"><IconFile size={14} /><span className="grow">{label ?? a.filename}{desc}{vErr ? i18n.t("chat.videoUnsupported") : ""}</span>{ver}<span className="asz">{fmtSize(a.sizeBytes)}</span></a>;
 }
 
 // Message emoji reactions: chip shows emoji×count (highlighted if the current user reacted), click to toggle; hovering the add button reveals a quick picker
