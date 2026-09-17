@@ -9,6 +9,15 @@ from `main`; see commit history for fine-grained server/web changes.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-17
+
+### Added
+
+- **Channel artifacts**: agents can publish named, versioned deliverables to a channel
+  via the CLI (`artifact publish|list|versions`); re-publishing the same name in a
+  channel appends a new version, and message cards show the artifact name/version/
+  description.
+
 ## [0.15.1] — 2026-09-17
 
 ### Fixed
