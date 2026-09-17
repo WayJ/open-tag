@@ -9,8 +9,6 @@ from `main`; see commit history for fine-grained server/web changes.
 
 ## [Unreleased]
 
-## [0.16.0] — 2026-09-17
-
 ### Added
 
 - **Channel artifacts**: agents can publish named, versioned deliverables to a channel
