@@ -1,6 +1,7 @@
 // Attachment multipart upload parser: streams via busboy into storage.saveObject (driver-agnostic: local disk or S3-compatible).
 import Busboy from "busboy";
 import type { IncomingMessage } from "node:http";
+import { Transform } from "node:stream";
 import { saveObject } from "./storage.js";
 
 export interface UploadedFile { filename: string; mimeType: string; size: number; storageKey: string }
@@ -33,6 +34,27 @@ export function sanitizeMimeType(declared: string): string {
   return "application/octet-stream";
 }
 
+/**
+ * Magic-byte sniffing fallback for uploads that arrive without a usable Content-Type
+ * (multipart part declared application/octet-stream). Clients that hit this: the agent
+ * CLI before it learned to set Blob { type }, and any third-party uploader.
+ *
+ * Security contract:
+ *   - Only ever REPLACES "application/octet-stream" — an explicit declared type is never
+ *     overridden. Serve-time safeDownloadHeaders() still whitelist-gates everything, so a
+ *     wrong sniff can at worst render a broken image, never execute content.
+ *   - The sniffed set contains only types already in SAFE_INLINE_TYPES (png/jpeg/gif/pdf)
+ *     — no scriptable type is ever introduced by sniffing.
+ */
+export function sniffMimeType(storedMime: string, head: Buffer): string {
+  if (storedMime !== "application/octet-stream" || head.length < 4) return storedMime;
+  if (head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
+  if (head.subarray(0, 6).toString("latin1") === "GIF87a" || head.subarray(0, 6).toString("latin1") === "GIF89a") return "image/gif";
+  if (head.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
+  return storedMime;
+}
+
 export function parseUpload(req: IncomingMessage): Promise<{ fields: Record<string, string>; files: UploadedFile[] }> {
   return new Promise((resolve, reject) => {
     let bb: ReturnType<typeof Busboy>;
@@ -50,8 +72,16 @@ export function parseUpload(req: IncomingMessage): Promise<{ fields: Record<stri
       // on Node ≥15). The error is remembered and surfaced once, after close.
       pending.push((async () => {
         try {
-          const { key, size } = await saveObject(info.filename || "file", stream);
-          files.push({ filename: info.filename || "file", mimeType: sanitizeMimeType(info.mimeType || "application/octet-stream"), size, storageKey: key });
+          // Tee the first chunks through a Transform so we can sniff magic bytes while the
+          // stream still flows into storage unchanged (no full buffering).
+          const head: Buffer[] = [];
+          const sniffed = new Transform({
+            transform(chunk: Buffer, _enc, cb) { if (head.length < 4) head.push(Buffer.from(chunk)); cb(null, chunk); },
+          });
+          stream.pipe(sniffed);
+          const { key, size } = await saveObject(info.filename || "file", sniffed);
+          const stored = sanitizeMimeType(info.mimeType || "application/octet-stream");
+          files.push({ filename: info.filename || "file", mimeType: sniffMimeType(stored, Buffer.concat(head)), size, storageKey: key });
         } catch (e) {
           stream.resume(); // drain any unconsumed bytes so busboy can finish and emit "close"
           firstError ??= e;
