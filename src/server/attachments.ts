@@ -71,19 +71,28 @@ export function parseUpload(req: IncomingMessage): Promise<{ fields: Record<stri
       // "close", and must never surface as an unhandledRejection (which crashes the process
       // on Node ≥15). The error is remembered and surfaced once, after close.
       pending.push((async () => {
+        // Tee the first chunks through a Transform so we can sniff magic bytes while the
+        // stream still flows into storage unchanged (no full buffering). Declared outside
+        // the try so the failure path can destroy it (see catch).
+        const head: Buffer[] = [];
+        const sniffed = new Transform({
+          transform(chunk: Buffer, _enc, cb) { if (head.length < 4) head.push(Buffer.from(chunk)); cb(null, chunk); },
+        });
         try {
-          // Tee the first chunks through a Transform so we can sniff magic bytes while the
-          // stream still flows into storage unchanged (no full buffering).
-          const head: Buffer[] = [];
-          const sniffed = new Transform({
-            transform(chunk: Buffer, _enc, cb) { if (head.length < 4) head.push(Buffer.from(chunk)); cb(null, chunk); },
-          });
           stream.pipe(sniffed);
           const { key, size } = await saveObject(info.filename || "file", sniffed);
           const stored = sanitizeMimeType(info.mimeType || "application/octet-stream");
           files.push({ filename: info.filename || "file", mimeType: sniffMimeType(stored, Buffer.concat(head)), size, storageKey: key });
         } catch (e) {
-          stream.resume(); // drain any unconsumed bytes so busboy can finish and emit "close"
+          // Storage failed: restore the drain contract. Two steps, both required —
+          // destroy() alone leaves the paused-by-pipe source stalled, and resume() alone
+          // does not restart flow on a busboy FileStream with no consumer attached
+          // (verified on Node 24: the request then hangs until client timeout).
+          // destroy unpipes (releases backpressure); the noop data listener + resume
+          // actually pull the remaining bytes through so busboy can emit "close".
+          sniffed.destroy();
+          stream.on("data", () => {});
+          stream.resume();
           firstError ??= e;
         }
       })());
