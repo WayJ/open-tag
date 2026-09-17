@@ -249,6 +249,29 @@ test("queue/dequeue of one scope stays silent on agent-level status while a sibl
   }
 });
 
+test("concurrent cold starts of one agent seed MEMORY.md without losing the Windows rename race", async () => {
+  // Two scopes cold-starting the same agent both see MEMORY.md ENOENT and both seed; on Windows the
+  // losing atomic rename can fail with EPERM/EEXIST. Seeding must tolerate the sibling winning.
+  // Several rounds to de-flake: the race window is tiny, so one pass proves little.
+  for (let round = 0; round < 5; round++) {
+    const root = mkdtempSync(path.join(tmpdir(), `open-tag-agent-scope-seed-race-${round}-`));
+    const { runtime, spawns } = fakeRuntime();
+    const mgr = newManager(root, runtime);
+    try {
+      const agentId = `agent-seed-race-${round}`;
+      await Promise.all([
+        mgr.start(agentId, scopedConfig(agentId, scopeOf("channel", "ch-a"))),
+        mgr.start(agentId, scopedConfig(agentId, scopeOf("thread", "th-b"))),
+      ]);
+      assert.equal(spawns.length, 2, "both scopes must spawn despite the concurrent seed");
+      mgr.stopAll();
+    } finally {
+      mgr.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("pressure-queued scoped starts keep their own configs (startQueue deduped by scopeKey)", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "open-tag-agent-scope-queue-"));
   let availableMemMB = 0;

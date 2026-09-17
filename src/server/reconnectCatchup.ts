@@ -15,7 +15,7 @@ import { and, eq, gt, inArray, ne, or, isNull, desc } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 import { agentHasScope } from "./scopes.js";
 import { conversationTurnDeliveryBlockReason, sendToMachine } from "./daemonHub.js";
-import { agentConfig } from "./agentConfig.js";
+import { agentConfig, resolveScope } from "./agentConfig.js";
 import { createLogger } from "../log.js";
 import { isWakeable } from "./agentWakePolicy.js";
 import { filterAgentInputView } from "./agentInputView.js";
@@ -29,7 +29,7 @@ const log = createLogger("server:catchup");
 const COOLDOWN_MS = Number(process.env.OPEN_TAG_CATCHUP_COOLDOWN_MS ?? 30_000);
 const lastRun = new Map<string, number>(); // machineId → last catch-up start ts
 
-interface Backlog { count: number; from: string; targetName: string; }
+interface Backlog { count: number; from: string; targetName: string; channelId: string; channelType: string; }
 type BacklogAgent = Pick<typeof schema.agents.$inferSelect,
   "id" | "serverId" | "scopes" | "incomingMode" | "commandWhitelist">;
 type BacklogRow = { seq: number; from: string; senderType: string; senderId: string | null };
@@ -48,7 +48,7 @@ export async function computeBacklog(agent: BacklogAgent, includeDurableTurns: b
     .where(and(eq(schema.channelMembers.memberType, "agent"), eq(schema.channelMembers.memberId, agent.id)));
 
   let count = 0;
-  let latest: { seq: number; from: string; targetName: string } | null = null;
+  let latest: { seq: number; from: string; targetName: string; channelId: string; channelType: string } | null = null;
   // Exclude the agent's own agent messages. Keep system rows so an owner-attributed reminder can wake its
   // author; the protected view below still rejects system rows attributed to an unlisted agent source.
   const notSelf = or(
@@ -134,11 +134,11 @@ export async function computeBacklog(agent: BacklogAgent, includeDurableTurns: b
       count += rows.length;
       const top = rows[0]!; // highest seq in this channel
       if (!latest || top.seq > latest.seq) {
-        latest = { seq: top.seq, from: top.from, targetName: m.type === "dm" ? `dm:@${top.from}` : `#${m.name ?? ""}` };
+        latest = { seq: top.seq, from: top.from, targetName: m.type === "dm" ? `dm:@${top.from}` : `#${m.name ?? ""}`, channelId: m.channelId, channelType: m.type };
       }
     }
   }
-  return latest ? { count, from: latest.from, targetName: latest.targetName } : null;
+  return latest ? { count, from: latest.from, targetName: latest.targetName, channelId: latest.channelId, channelType: latest.channelType } : null;
 }
 
 /** Wake every agent on this machine that has a wakeable backlog. Called from ws.ts onReady AFTER the
@@ -189,9 +189,14 @@ export async function catchUpAgentsOnMachine(serverId: string, machineId: string
     } else {
       // soft offline (WS dropped, process alive): agent:start is a no-op for a running agent (agentManager.ts),
       // so inject an inbox notice via deliver to drive a `message check`. Body-free: the agent pulls real unread.
+      // Scope the wake to the channel that owns the backlog: scope-less would route to the LEGACY
+      // session, whose runtime is not the one running under scoped sessions (pendingDelivers would
+      // TTL-expire unread). resolveScope = thread row → thread scope, any other live row → channel.
+      const backlogScope = resolveScope({ type: backlog.channelType, id: backlog.channelId });
       if (sendToMachine(machineId, {
         type: "agent:deliver", agentId: a.id, seq: 0, from: backlog.from,
         target: "", targetName: backlog.targetName, msgShort: "", isTask: false, mentioned: false,
+        scope: backlogScope,
       })) woke++;
     }
   }

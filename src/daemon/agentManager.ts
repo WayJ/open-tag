@@ -451,7 +451,16 @@ export class AgentManager {
     try { await readManagedFile(stateDir, "MEMORY.md"); } catch (error: any) {
       const replaceUnsafeLink = error instanceof Error && error.message.includes("file is a symbolic link");
       if (error?.code !== "ENOENT" && !replaceUnsafeLink) throw error;
-      await atomicWriteManagedFile(stateDir, "MEMORY.md", seedMemory(config.displayName || config.name, config.description));
+      try {
+        await atomicWriteManagedFile(stateDir, "MEMORY.md", seedMemory(config.displayName || config.name, config.description));
+      } catch (seedError: any) {
+        // Windows: two scopes of one agent cold-starting concurrently both see ENOENT and both seed;
+        // the loser's rename onto the winner's fresh target can fail with EPERM/EEXIST. Seed content
+        // is identical by construction, so re-read: the file now exists → the sibling won, continue;
+        // still missing → this was a real failure, rethrow it.
+        if (seedError?.code !== "EPERM" && seedError?.code !== "EEXIST") throw seedError;
+        try { await readManagedFile(stateDir, "MEMORY.md"); } catch { throw seedError; }
+      }
     }
     this.assertStartActive(key, attempt);
 
