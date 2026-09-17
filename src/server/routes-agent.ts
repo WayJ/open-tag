@@ -17,6 +17,7 @@ import { isConversationTurnCapabilityPaused } from "./conversationTurnRecovery.j
 import { CHANNEL_DELETED_NOTICE_KIND, channelDeletedNoticeForAgent, type ChannelDeletedNoticeMetadata } from "./channelDeletionNotice.js";
 import { inputSenderAllowed } from "./agentInputPolicy.js";
 import { agentInputVisible, filterAgentInputView } from "./agentInputView.js";
+import { handleArtifactRoutes } from "./routes-agent/artifacts.js";
 
 // Freshness-hold draft buffer (prevents agent↔agent duplicate replies): when the agent sends
 // and new messages have arrived since last read → save as draft + surface bounded context, do not post immediately.
@@ -37,6 +38,8 @@ function requiredScope(p: string): string | null {
   if (p === "/agent-api/task/claim" || p === "/agent-api/task/update" || p === "/agent-api/task/new" || p === "/agent-api/task/assign") return "task:write";
   if (p === "/agent-api/search") return "message:read";
   if (p === "/agent-api/attachment/upload") return "attachment:upload";
+  if (p === "/agent-api/artifact/publish") return "attachment:upload";
+  if (p === "/agent-api/artifact/list" || p === "/agent-api/artifact/versions") return "attachment:view";
   if (p === "/agent-api/thread/reply") return "message:send";
   if (p === "/agent-api/thread/read") return "message:read";
   if (p === "/agent-api/message/resolve") return "message:read";
@@ -531,6 +534,9 @@ export async function handleAgentApi(req: IncomingMessage, res: ServerResponse, 
     }
     return (sendJson(res, 200, { attachments: out, attachmentId: out[0]?.attachmentId }), true);
   }
+  // Channel artifacts (versioned deliverables): publish/list/versions live in the first split
+  // file under routes-agent/ — mounted after resolveAgent + scope check, like every inline route.
+  if (await handleArtifactRoutes(req, res, url, method, p, agent, serverId)) return true;
 
   if (p === "/agent-api/message/react" && method === "POST") {
     const b = await readJson(req);
