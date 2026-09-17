@@ -64,7 +64,7 @@ export async function handleArtifactRoutes(
     }).returning();
 
     const attempt = () => db.transaction(async (tx) => {
-      let art = (await tx.select().from(schema.artifacts).where(and(eq(schema.artifacts.channelId, chId), eq(schema.artifacts.name, name))).limit(1))[0];
+      let art = (await tx.select().from(schema.artifacts).where(and(eq(schema.artifacts.serverId, serverId), eq(schema.artifacts.channelId, chId), eq(schema.artifacts.name, name))).limit(1))[0];
       if (!art) {
         [art] = await tx.insert(schema.artifacts).values({ serverId, channelId: chId, name, description, createdByType: "agent", createdByAgentId: agent.id }).returning();
       } else if (description !== null) {
