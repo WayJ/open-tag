@@ -1,3 +1,8 @@
+## 2026-09-17 · security-review infos (attachment serving)
+
+- **[info] attachment responses lack `Cache-Control`** — responses carrying `?token=` in the URL can be heuristically disk-cached by browsers (all tiers, pre-existing). Suggested: `cache-control: private, no-store` in `safeDownloadHeaders`. Low priority; browsers rarely reuse without validator.
+- **[info] sniff head buffer counts chunks, not bytes** — `head.length < 4` copies up to 4 whole chunks (bounded, transient); a client drip-feeding 1-byte chunks can starve the 8-byte PNG magic check → fail-closed to octet-stream (correct behavior, noted for semantics only). `src/server/attachments.ts` parseUpload.
+
 # Tech Debt & Doc Drift Tracker
 
 > The "garbage collection" ledger for this codebase (tech debt compounds like high-interest loans — pay in small installments continuously rather than deferring to one big payoff).
