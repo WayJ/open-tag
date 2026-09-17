@@ -500,6 +500,7 @@
     "retryLoad": "重试",
     "jumpToMessage": "跳到原消息",
     "download": "下载",
+    "previewError": "预览失败，请下载查看",
     "asTask": "作为任务",
     "agentKind": "agent",
     "userKind": "用户",

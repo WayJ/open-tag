@@ -15,7 +15,7 @@ import { bearer, isUuid, sendErr, sendJson } from "../util.js";
  * navigated to directly — browsers parse them as media, not as documents.
  *
  * Intentional exclusions:
- *   - text/html, application/xhtml+xml → HTML execution.
+ *   - text/html, application/xhtml+xml → handled separately in SANDBOXED_INLINE_TYPES (Tier 4 sandboxed inline).
  *   - image/svg+xml → handled separately in SAFE_INLINE_WITH_CSP_TYPES.
  *   - text/javascript, application/javascript → direct execution.
  *   - text/xml, application/xml → XSLT may load external resources.
@@ -52,15 +52,32 @@ const SAFE_INLINE_WITH_CSP_TYPES = new Set<string>([
 const SVG_SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 /**
+ * Tier 4 — HTML documents rendered in the sandboxed preview (GitHub-preview model).
+ * text/html / application/xhtml+xml are served inline with a CSP sandbox: the document
+ * gets a unique opaque origin (no access to this app's localStorage/cookies), scripts,
+ * forms, popups and top-level navigation are blocked, and default-src 'none' cuts every
+ * external load. style-src 'unsafe-inline' + img-src data: keep pages visually intact
+ * (inline styles, embedded base64 images) without opening a network channel.
+ * referrer-policy: no-referrer never leaks the ?token= query as a referrer.
+ * Safe both inside the preview iframe and on direct URL navigation — the sandbox lives
+ * in the response header, not the embedding context.
+ */
+const SANDBOXED_INLINE_TYPES = new Set<string>([
+  "text/html", "application/xhtml+xml",
+]);
+const HTML_SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox";
+
+/**
  * Compute safe HTTP response headers for an attachment download.
  *
- * Three tiers:
+ * Four tiers:
  *  1. SAFE_INLINE_TYPES        → inline, declared MIME, nosniff.
  *  2. SAFE_INLINE_WITH_CSP_TYPES (SVG) → inline, declared MIME, nosniff +
  *     CSP sandbox (neutralises same-origin script execution on direct nav).
- *  3. Everything else          → application/octet-stream, attachment, nosniff.
+ *  3. SANDBOXED_INLINE_TYPES (html) → inline, declared MIME, CSP sandbox + no-referrer + nosniff.
+ *  4. Everything else          → application/octet-stream, attachment, nosniff.
  *
- * Tier 3 covers legacy DB records too (operates on stored value, not upload-time
+ * Tier 4 covers legacy DB records too (operates on stored value, not upload-time
  * declared value), so old records with dangerous MIMEs are also protected.
  */
 export function safeDownloadHeaders(storedMime: string, filename: string): Record<string, string> {
@@ -79,6 +96,15 @@ export function safeDownloadHeaders(storedMime: string, filename: string): Recor
       "content-type": storedMime,
       "content-disposition": `inline; filename*=UTF-8''${encodedName}`,
       "content-security-policy": SVG_SANDBOX_CSP,
+      ...nosniff,
+    };
+  }
+  if (storedMime && SANDBOXED_INLINE_TYPES.has(storedMime)) {
+    return {
+      "content-type": storedMime,
+      "content-disposition": `inline; filename*=UTF-8''${encodedName}`,
+      "content-security-policy": HTML_SANDBOX_CSP,
+      "referrer-policy": "no-referrer",
       ...nosniff,
     };
   }

@@ -16,6 +16,7 @@ const TASK_ICON: Record<string, typeof Circle> = { todo: Circle, in_progress: Pl
 import { IconFile, IconExternalLink, IconDownload } from "../icons.tsx";
 import { Avatar, resolveAvatar } from "../Avatar.tsx";
 import { Lightbox } from "../Lightbox.tsx";
+import { AttPreview } from "../AttPreview.tsx";
 import { TaskBoard, ynOptions, ST_LABEL } from "../TaskBoard.tsx";
 import { PaneEmpty } from "../PaneEmpty.tsx";
 import { ChatSkeleton } from "./Skeleton.tsx";
@@ -31,6 +32,7 @@ import type { LayoutOutletContext } from "../Layout.tsx";
 const fmtSize = (n?: number) => (!n ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
 const isImage = (m?: string) => !!m && m.startsWith("image/");
 const isVideo = (m?: string) => !!m && m.startsWith("video/");
+const isHtmlDoc = (m?: string) => m === "text/html" || m === "application/xhtml+xml";
 export const BACK_TO_BOTTOM_SCROLL_MS = 800;
 export const MESSAGE_ENTER_PIN_MS = 1000;
 export const backToBottomEase = (t: number) => 1 - Math.pow(1 - t, 3);
@@ -79,11 +81,18 @@ export function keepPinnedToBottomDuringEnter(el: Pick<HTMLDivElement, "scrollTo
 function AttCard({ a, url }: { a: Att; url: string }) {
   const [lb, setLb] = useState(false);
   const [vErr, setVErr] = useState(false);
+  const [pv, setPv] = useState(false);
   if (isImage(a.mimeType)) return (<>
     <button className="msg-att-img" title={a.filename} onClick={() => setLb(true)}><img src={url} alt={a.filename} loading="lazy" /></button>
     {lb && <Lightbox src={url} alt={a.filename} onClose={() => setLb(false)} />}
   </>);
   if (isVideo(a.mimeType) && !vErr) return <video className="msg-att-video" src={url} controls playsInline preload="metadata" title={a.filename} onError={() => setVErr(true)} />;
+  if (isHtmlDoc(a.mimeType)) return (<>
+    <a className="msg-att" href={url} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); setPv(true); }} title={a.filename}>
+      <IconFile size={14} /><span className="grow">{a.filename}</span><span className="asz">{fmtSize(a.sizeBytes)}</span>
+    </a>
+    {pv && <AttPreview url={url} filename={a.filename} onClose={() => setPv(false)} />}
+  </>);
   return <a className="msg-att" href={url} target="_blank" rel="noreferrer"><IconFile size={14} /><span className="grow">{a.filename}{vErr ? i18n.t("chat.videoUnsupported") : ""}</span><span className="asz">{fmtSize(a.sizeBytes)}</span></a>;
 }
 
@@ -866,13 +875,15 @@ function ChannelFiles({ channelId }: { channelId: string }) {
   const { api, attachmentUrl, slug } = useStore();
   const nav = useNavigate();
   const [files, setFiles] = useState<any[]>([]);
+  const [pv, setPv] = useState<{ id: string; filename: string } | null>(null);
   useEffect(() => { (async () => { const d = await api("GET", `/api/channels/${channelId}/files`); setFiles(d?.files || []); })(); }, [channelId]);
   return (
     <div className="scroll ch-view-enter">
       {files.length === 0 ? <div className="empty">{t("chat.noFiles")}</div>
         : files.map((f) => (
           <div key={f.id} className="card file-row">
-            <a className="file-main" href={attachmentUrl(f.id)} target="_blank" rel="noreferrer">
+            <a className="file-main" href={attachmentUrl(f.id)} target="_blank" rel="noreferrer"
+               onClick={(e) => { if (isHtmlDoc(f.mimeType)) { e.preventDefault(); setPv({ id: f.id, filename: f.filename }); } }}>
               {isImage(f.mimeType) ? <img className="file-thumb" src={attachmentUrl(f.id)} alt={f.filename} loading="lazy" /> : <IconFile size={22} />}
               <div className="grow"><div className="who">{f.filename}</div><div className="meta">{fmtSize(f.sizeBytes)} · {f.uploader?.displayName || f.uploader?.name || (f.uploader?.type === "agent" ? t("chat.agentKind") : t("chat.memberKind"))} · {fmtDateTime(f.createdAt)}</div></div>
             </a>
@@ -882,6 +893,7 @@ function ChannelFiles({ channelId }: { channelId: string }) {
             </div>
           </div>
         ))}
+      {pv && <AttPreview url={attachmentUrl(pv.id)} filename={pv.filename} onClose={() => setPv(null)} />}
     </div>
   );
 }

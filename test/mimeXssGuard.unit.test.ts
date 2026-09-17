@@ -8,12 +8,17 @@
 // Fix contract:
 //   - sanitizeMimeType() normalises client-declared MIME before storage (strips params,
 //     lowercase, rejects malformed types).
-//   - safeDownloadHeaders() three-tier whitelist:
+//   - safeDownloadHeaders() four-tier whitelist:
 //       • SAFE_INLINE_TYPES (jpeg/png/gif/webp/pdf/audio/video): inline, no extra headers.
 //       • SAFE_INLINE_WITH_CSP_TYPES (image/svg+xml): inline with declared MIME + CSP sandbox
 //         (default-src 'none'; style-src 'unsafe-inline'; sandbox) so browser image elements
 //         can render it but direct navigation is sandboxed (no script execution, unique origin).
-//       • Everything else (text/html, text/javascript, application/xhtml+xml …):
+//       • SANDBOXED_INLINE_TYPES (text/html, application/xhtml+xml): inline with declared MIME
+//         + CSP sandbox (default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox)
+//         + referrer-policy: no-referrer. The sandbox directive gives the document a unique
+//         opaque origin — scripts/forms/popups blocked, no same-origin data access — so HTML
+//         preview is safe both in an iframe and on direct URL navigation (GitHub-preview model).
+//       • Everything else (text/javascript, text/xml, …):
 //         Content-Type: application/octet-stream + Content-Disposition: attachment.
 //
 // These tests will FAIL before the fix (the exported functions do not exist yet),
@@ -53,14 +58,33 @@ test("sanitizeMimeType: falls back to octet-stream for malformed / injection inp
   assert.equal(sanitizeMimeType("/nosubtype"), "application/octet-stream");
 });
 
-// ── safeDownloadHeaders: XSS-risky types → attachment + octet-stream ───────
+// ── safeDownloadHeaders: javascript/xml → attachment + octet-stream ────────
 
-test("safeDownloadHeaders: text/html → attachment + octet-stream (core XSS prevention)", () => {
-  const h = safeDownloadHeaders("text/html", "evil.html");
-  assert.equal(h["content-type"], "application/octet-stream",
-    "must NOT reflect text/html back to browser");
-  assert.match(h["content-disposition"], /^attachment;/,
-    "must force attachment so browser never inline-renders it");
+test("safeDownloadHeaders: text/html → inline + CSP sandbox (Tier 4, sandboxed HTML preview)", () => {
+  // Supersedes the old "attachment + octet-stream" contract: the defense changed shape, not strength.
+  // Scripts are blocked by CSP 'sandbox' (unique opaque origin — no access to same-origin
+  // localStorage/cookies), external loads by default-src 'none'. Direct URL navigation and
+  // iframe embedding are both covered (response-header CSP applies either way).
+  const h = safeDownloadHeaders("text/html", "page.html");
+  assert.equal(h["content-type"], "text/html",
+    "Tier 4 keeps the declared content-type so the browser parses it as a document");
+  assert.match(h["content-disposition"], /^inline;/,
+    "Tier 4 is inline so the preview iframe renders instead of triggering a download");
+  assert.match(h["content-security-policy"]!, /\bsandbox\b/,
+    "CSP must include 'sandbox' — unique origin, scripts/forms/popups/top-nav all blocked");
+  assert.match(h["content-security-policy"]!, /default-src 'none'/,
+    "no external resource loads (scripts, sub-frames, XHR, tracking pixels)");
+  assert.match(h["content-security-policy"]!, /style-src 'unsafe-inline'/,
+    "inline styles must render for visual fidelity");
+  assert.match(h["content-security-policy"]!, /img-src data:/,
+    "embedded base64 images must render");
+  // Exact pin: the tripwire against a silent relaxation (e.g. `sandbox allow-scripts
+  // allow-same-origin` or `img-src data: https:`) that would still satisfy the matches above.
+  assert.equal(h["content-security-policy"],
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+  assert.equal(h["referrer-policy"], "no-referrer",
+    "token lives in the query string — never leak it as a referrer");
+  assert.equal(h["x-content-type-options"], "nosniff");
 });
 
 test("safeDownloadHeaders: text/javascript → attachment", () => {
@@ -75,10 +99,15 @@ test("safeDownloadHeaders: application/javascript → attachment", () => {
   assert.match(h["content-disposition"], /^attachment;/);
 });
 
-test("safeDownloadHeaders: application/xhtml+xml → attachment", () => {
-  const h = safeDownloadHeaders("application/xhtml+xml", "evil.xhtml");
-  assert.equal(h["content-type"], "application/octet-stream");
-  assert.match(h["content-disposition"], /^attachment;/);
+test("safeDownloadHeaders: application/xhtml+xml → inline + CSP sandbox (Tier 4)", () => {
+  const h = safeDownloadHeaders("application/xhtml+xml", "page.xhtml");
+  assert.equal(h["content-type"], "application/xhtml+xml");
+  assert.match(h["content-disposition"], /^inline;/);
+  assert.match(h["content-security-policy"]!, /\bsandbox\b/);
+  assert.match(h["content-security-policy"]!, /default-src 'none'/);
+  assert.equal(h["content-security-policy"],
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+  assert.equal(h["referrer-policy"], "no-referrer");
 });
 
 // ── SVG: inline with CSP sandbox (avatar rendering must work; scripts must not execute) ──
@@ -202,6 +231,6 @@ test("safeDownloadHeaders: x-content-type-options: nosniff on safe inline type",
 });
 
 test("safeDownloadHeaders: x-content-type-options: nosniff on forced attachment type", () => {
-  const h = safeDownloadHeaders("text/html", "evil.html");
+  const h = safeDownloadHeaders("text/javascript", "evil.js");
   assert.equal(h["x-content-type-options"], "nosniff");
 });
