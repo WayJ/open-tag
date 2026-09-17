@@ -56,7 +56,7 @@ test("startAgent refuses a disconnected target machine before marking the agent 
   );
   assert.match(
     coreSrc,
-    /const cfg = await agentConfig\(agentId\);/,
+    /const cfg = await agentConfig\(agentId, scopeCtx\);/,
     "offline machines should be rejected before minting or sending an agent token",
   );
   assert.match(
@@ -69,7 +69,7 @@ test("startAgent refuses a disconnected target machine before marking the agent 
     /async function agentStartPreflight[\s\S]*?if \(!a\.machineId\) \{[\s\S]*?if \(daemonCount\(serverId\) === 0\) return \{ ok: false, reason: "no daemon online" \};[\s\S]*?return \{ ok: true, machineId: null, projectPath: null, status: a\.status \};[\s\S]*?\}/,
     "legacy unbound agents should keep their broadcast fallback instead of being marked machine-offline",
   );
-  assert.match(coreSrc, /async function agentStartTarget[\s\S]*?const cfg = await agentConfig\(agentId\);/,
+  assert.match(coreSrc, /async function agentStartTarget[\s\S]*?const cfg = await agentConfig\(agentId, scopeCtx\);/,
     "only the actual start path should mint the agent config after preflight");
   assert.match(
     coreSrc,

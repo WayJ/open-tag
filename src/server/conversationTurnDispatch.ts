@@ -21,6 +21,7 @@ import { ensureReplyRecipients, releaseUnavailableReplyGrant, reserveReplyRecipi
 import { agentHasScope } from "./scopes.js";
 import { inputSenderAllowed } from "./agentInputPolicy.js";
 import { attributedInputSenderType } from "./agentInputView.js";
+import type { AgentScope, ScopeContext } from "./agentConfig.js";
 
 type PersistedMessage = typeof schema.messages.$inferSelect;
 type PersistedChannel = typeof schema.channels.$inferSelect;
@@ -33,10 +34,10 @@ export interface DispatchMember {
   displayName: string;
 }
 
-export interface ConversationTurnDispatchDeps<TTarget extends { ok: true }> {
+export interface ConversationTurnDispatchDeps<TTarget extends { ok: true; cfg?: { scope?: AgentScope } }> {
   channelMembers(channelId: string): Promise<DispatchMember[]>;
   parseMentions(content: string, members: DispatchMember[]): DispatchMember[];
-  agentStartTarget(serverId: string, agentId: string): Promise<TTarget | { ok: false; reason: string; retryable?: boolean }>;
+  agentStartTarget(serverId: string, agentId: string, scopeCtx?: ScopeContext): Promise<TTarget | { ok: false; reason: string; retryable?: boolean }>;
   /** Pure capability/topology check used before an explicit multi-recipient Turn becomes visible. */
   agentStartPreflight?(serverId: string, agentId: string): Promise<{ ok: true } | { ok: false; reason: string; retryable?: boolean }>;
   sendAgentStart(serverId: string, target: TTarget, agentId: string, durableTurn?: boolean): boolean;
@@ -132,7 +133,7 @@ interface AgentDeliveryInput {
 
 type AgentDeliveryOutcome = "delivered" | "retryable_failure" | "capability_blocked";
 
-async function deliverAgentResponsibility<TTarget extends { ok: true }>(
+async function deliverAgentResponsibility<TTarget extends { ok: true; cfg?: { scope?: AgentScope } }>(
   input: AgentDeliveryInput,
   deps: ConversationTurnDispatchDeps<TTarget>,
 ): Promise<AgentDeliveryOutcome> {
@@ -150,7 +151,7 @@ async function deliverAgentResponsibility<TTarget extends { ok: true }>(
       )).limit(1);
     if (existing?.deliveryAdmittedAt) return "delivered";
   }
-  const target = await deps.agentStartTarget(input.serverId, input.member.id);
+  const target = await deps.agentStartTarget(input.serverId, input.member.id, { channelId: input.channelId });
   if (!target.ok) {
     const capabilityBlocked = target.retryable === false;
     if (!input.preserveGrantOnFailure) await releaseUnavailableReplyGrant(input.trigger.id, input.member.id);
@@ -178,6 +179,7 @@ async function deliverAgentResponsibility<TTarget extends { ok: true }>(
       turnMessageCount: input.turnMessageCount,
       attention: input.attention,
       deliveryId,
+      ...(target.cfg?.scope ? { scope: target.cfg.scope } : {}),
     });
   } catch (error) {
     ack?.cancel();
@@ -205,7 +207,7 @@ async function deliverAgentResponsibility<TTarget extends { ok: true }>(
 }
 
 /** Compatibility path for non-conversational system messages. User/Agent chat uses durable Turn dispatch. */
-export async function dispatchLegacyMessage<TTarget extends { ok: true }>(input: {
+export async function dispatchLegacyMessage<TTarget extends { ok: true; cfg?: { scope?: AgentScope } }>(input: {
   msg: PersistedMessage;
   channel: PersistedChannel | undefined;
   members: DispatchMember[];
@@ -257,7 +259,7 @@ export async function dispatchLegacyMessage<TTarget extends { ok: true }>(input:
 }
 
 /** Durable Turn dispatcher: exactly one process claims the turn before any Activity or daemon side effect. */
-export async function dispatchConversationTurn<TTarget extends { ok: true }>(
+export async function dispatchConversationTurn<TTarget extends { ok: true; cfg?: { scope?: AgentScope } }>(
   turnId: string,
   deps: ConversationTurnDispatchDeps<TTarget>,
 ): Promise<void> {
