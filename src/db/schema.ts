@@ -91,6 +91,23 @@ export const agents = pgTable("agents", {
   nameUniq: uniqueIndex("agents_name_uniq").on(t.serverId, t.name).where(sql`${t.deletedAt} is null`),
 }));
 
+// Scoped sessions: one persistent runtime session per (agent, channel|thread),
+// mirroring the "one persistent session per thread" model. agents.session_id is
+// legacy (agent-wide single chain) — kept readable for compat; no longer written by
+// scoped dispatch, but scope-less/LEGACY uplinks still write it (see fallback section).
+export const agentSessions = pgTable("agent_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => servers.id),
+  agentId: uuid("agent_id").notNull().references(() => agents.id),
+  scopeType: text("scope_type").notNull(),   // "channel" | "thread"
+  scopeId: uuid("scope_id").notNull().references(() => channels.id), // thread scope → thread's own channel id
+  sessionId: text("session_id"),             // null until first runtime report
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  scopeUniq: uniqueIndex("agent_sessions_scope_uniq").on(t.agentId, t.scopeType, t.scopeId),
+  byAgent: index("agent_sessions_agent_idx").on(t.agentId),
+}));
+
 // ── Channel / DM / Thread ───────────────────────────────────────
 export const channels = pgTable("channels", {
   id: uuid("id").defaultRandom().primaryKey(),
