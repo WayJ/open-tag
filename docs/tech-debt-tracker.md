@@ -1,3 +1,8 @@
+## 2026-09-17 · channel-artifacts follow-ups (post-review minors)
+
+- **[minor] concurrency 23505 path untested** — publish retry-once + 409 (attachment-row cleanup) is index-backed but never exercised by a test. Add a two-transaction conflict test when convenient. `src/server/routes-agent/artifacts.ts`
+- **[minor] image/video artifact cards show no artifact identity** — AttCard enriches only the html/md/fallback file-card branches; image thumbs (and Lightbox) still show the raw filename. An image artifact's name/vN/description is invisible to humans until the Files-tab artifact library lands (deferred UI slice).
+
 ## 2026-09-17 · security-review infos (attachment serving)
 
 - **[info] attachment responses lack `Cache-Control`** — responses carrying `?token=` in the URL can be heuristically disk-cached by browsers (all tiers, pre-existing). Suggested: `cache-control: private, no-store` in `safeDownloadHeaders`. Low priority; browsers rarely reuse without validator.
