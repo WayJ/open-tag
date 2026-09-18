@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema, sql } from "../db/index.js";
 import { pub, redis, sub } from "../redis.js";
-import { authorizePendingDmGrants, canAgentManageCoordinatedTask, checkReplyGrant, claimReplyCoordination, decideReply, ensureReplyRecipients, finishReplyPublication, markReplyMessagesObserved, reserveReplyGrant } from "./replyCoordination.js";
+import { authorizePendingDmGrants, canAgentManageCoordinatedTask, checkReplyGrant, claimReplyCoordination, decideReply, ensureReplyRecipients, finishReplyPublication, markReplyMessagesObserved, releaseUnavailableReplyGrant, reserveReplyGrant, reserveReplyRecipients } from "./replyCoordination.js";
 import { assignTask, createMessage, getOrCreateThread } from "./core.js";
 
 after(async () => {
@@ -414,5 +414,50 @@ test("multi-mention order chooses a primary plus directed contributors and a DM 
     assert.equal(dmDecision?.attention, "dm");
     assert.equal(dmDecision?.grantSlot, "primary");
     assert.equal(dmDecision?.grantStatus, "reserved");
+  } finally { await f.cleanup(); }
+});
+
+test("releaseUnavailableReplyGrant releases reserved, active, and crash-orphaned publishing grants", async () => {
+  const f = await fixture("unavailable-release");
+  try {
+    const [codex, codex2, codex3] = f.agents;
+    const mk = async (seq: number) => f.makeMessage(seq);
+
+    // reserved: dispatched but the runtime never observed it
+    const reservedMsg = await mk(9_100_400);
+    await reserveReplyRecipients({ serverId: f.server.id, channelId: f.channel.id, messageId: reservedMsg.id, recipients: [{ agentId: codex!.id, attention: "direct" }] });
+    // active: observed and granted, agent went unavailable before replying
+    const activeMsg = await mk(9_100_401);
+    await ensureReplyRecipients({ serverId: f.server.id, channelId: f.channel.id, messageId: activeMsg.id, recipients: [{ agentId: codex2!.id, attention: "direct" }] });
+    // publishing: the agent reserved the slot for publication, then the process died between
+    // reserve and publish — previously this state was unreachable by the release and the slot
+    // stayed orphaned forever.
+    const publishingMsg = await mk(9_100_402);
+    await ensureReplyRecipients({ serverId: f.server.id, channelId: f.channel.id, messageId: publishingMsg.id, recipients: [{ agentId: codex3!.id, attention: "direct" }] });
+    await markReplyMessagesObserved(codex3!.id, [publishingMsg.id]);
+    const reservedGrant = await reserveReplyGrant({ serverId: f.server.id, agentId: codex3!.id, messageId: publishingMsg.id, channelId: f.channel.id });
+    assert.equal(reservedGrant.ok, true, "fixture needs a publishing-state grant");
+    // control: a consumed grant must stay consumed
+    const consumedMsg = await mk(9_100_403);
+    await ensureReplyRecipients({ serverId: f.server.id, channelId: f.channel.id, messageId: consumedMsg.id, recipients: [{ agentId: codex!.id, attention: "direct" }] });
+    await markReplyMessagesObserved(codex!.id, [consumedMsg.id]);
+    await reserveReplyGrant({ serverId: f.server.id, agentId: codex!.id, messageId: consumedMsg.id, channelId: f.channel.id });
+    await finishReplyPublication({ messageId: consumedMsg.id, agentId: codex!.id, replyMessageId: consumedMsg.id });
+
+    await releaseUnavailableReplyGrant(reservedMsg.id, codex!.id);
+    await releaseUnavailableReplyGrant(activeMsg.id, codex2!.id);
+    await releaseUnavailableReplyGrant(publishingMsg.id, codex3!.id);
+    await releaseUnavailableReplyGrant(consumedMsg.id, codex!.id);
+
+    const rows = await db.select().from(schema.agentMessageDecisions).where(inArray(schema.agentMessageDecisions.messageId, [reservedMsg.id, activeMsg.id, publishingMsg.id, consumedMsg.id]));
+    const statusOf = (messageId: string, agentId: string) => rows.find((r) => r.messageId === messageId && r.agentId === agentId);
+    for (const [messageId, agentId] of [[reservedMsg.id, codex!.id], [activeMsg.id, codex2!.id], [publishingMsg.id, codex3!.id]] as const) {
+      const row = statusOf(messageId, agentId);
+      assert.equal(row?.grantStatus, "released", "reserved/active/publishing grants must be releasable");
+      assert.equal(row?.reasonCode, "recipient_unavailable");
+    }
+    const consumed = statusOf(consumedMsg.id, codex!.id);
+    assert.equal(consumed?.grantStatus, "consumed", "a consumed grant must not be flipped by the release");
+    assert.equal(consumed?.reasonCode, null);
   } finally { await f.cleanup(); }
 });
