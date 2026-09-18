@@ -108,6 +108,62 @@ export function applyAgentReplyPreview(messages: Msg[], e: AgentReplyEvent, agen
   return [...withoutSuperseded, preview];
 }
 
+/** One in-progress run as returned by GET /api/messages/channel/:id (`running[]`) — the server-side
+ *  aggregate of unclaimed activity rows, so a freshly loaded client can rebuild the live card. */
+export interface RunningAgentRunPayload {
+  agentId: string;
+  agentName: string;
+  streamId: string;
+  startedAt: number;
+  items: AgentActivityItem[];
+}
+
+/** Rebuild live-run cards after a page refresh / channel re-entry. For every running run:
+ *  - a persisted mid-run message on the same stream already carries the card → backfill only the
+ *    rows newer than what that message last held (events missed between its claim and the load);
+ *  - otherwise synthesize the same `agent_reply_preview` pseudo-message the socket `op:start`
+ *    path builds, already visible (the run predates this load — no AGENT_REPLY_PREVIEW_DELAY_MS).
+ *  Later socket events route by streamId via findStreamTargetIndex, so the restored card keeps
+ *  appending live and `done/error` absorbs it into the real message as usual. */
+export function restoreRunningAgentRuns(messages: Msg[], running: RunningAgentRunPayload[] | undefined, channelId: string, now = Date.now()): Msg[] {
+  let next = messages;
+  for (const run of running ?? []) {
+    if (!run?.agentId || !run.streamId) continue;
+    const targetIdx = next.findIndex((m) => m.senderType === "agent"
+      && m.senderId === run.agentId
+      && m.agentActivityStreamId === run.streamId
+      && m.agentActivityState === "running");
+    if (targetIdx >= 0) {
+      const target = next[targetIdx]!;
+      const lastTs = target.agentActivity?.length ? target.agentActivity[target.agentActivity.length - 1]!.timestamp : 0;
+      const missed = run.items.filter((item) => item.timestamp > lastTs);
+      if (!missed.length) continue;
+      next = next.map((m, i) => i === targetIdx ? { ...m, agentActivity: [...(m.agentActivity ?? []), ...missed] } : m);
+      continue;
+    }
+    if (next.some((m) => m.messageType === AGENT_REPLY_PREVIEW_TYPE && m.senderId === run.agentId && (m as AgentReplyPreviewMsg).streamId === run.streamId)) continue;
+    const preview: AgentReplyPreviewMsg = {
+      id: agentReplyPreviewId(run.agentId, run.streamId),
+      seq: Number.MAX_SAFE_INTEGER,
+      channelId,
+      senderType: "agent",
+      senderId: run.agentId,
+      senderName: run.agentName || "Agent",
+      content: "",
+      messageType: AGENT_REPLY_PREVIEW_TYPE,
+      createdAt: new Date(run.startedAt || now).toISOString(),
+      clientRenderKey: agentReplyPreviewId(run.agentId, run.streamId),
+      streamId: run.streamId,
+      streamVisible: true,
+      streamVisibleAt: now,
+      agentActivity: run.items ?? [],
+      agentActivityState: "running",
+    };
+    next = [...next, preview];
+  }
+  return next;
+}
+
 export function dropAgentReplyPreviewsForMessage(messages: Msg[], msg: Msg): Msg[] {
   if (msg.senderType !== "agent" || !msg.senderId) return messages;
   return messages.filter((m) => !(m.messageType === AGENT_REPLY_PREVIEW_TYPE && m.channelId === msg.channelId && m.senderId === msg.senderId));

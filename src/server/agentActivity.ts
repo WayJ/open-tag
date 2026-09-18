@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 
 export interface AgentActivityItem {
@@ -106,4 +106,64 @@ export async function assignActivityRows(rows: (typeof schema.agentActivityLog.$
     isNull(schema.agentActivityLog.messageId),
     inArray(schema.agentActivityLog.id, rows.map((row) => row.id)),
   ));
+}
+
+export interface RunningAgentRun {
+  agentId: string;
+  agentName: string;
+  streamId: string;
+  startedAt: number;
+  items: AgentActivityItem[];
+}
+
+/** Upper bound on how old the freshest row of a run may be for page-refresh restore to still show
+ *  it as live (daemon wall-clock ceiling from the watchdog design — L3 24h). Guards against
+ *  orphaned pending rows (crashed daemon never sent done/error) resurrecting as phantom cards. */
+export const RUNNING_RUN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** In-progress runs for a channel, aggregated from unclaimed activity rows (messageId is null)
+ *  grouped per agent+streamId. Returned alongside GET /api/messages/channel/:id so a freshly
+ *  loaded client can rebuild the live "agent working" card that socket events built pre-refresh.
+ *  Liveness guard: the agent must still be a live teammate — not soft-deleted, in an active-ish
+ *  status, on an online machine, with a fresh row inside RUNNING_RUN_MAX_AGE_MS. */
+export async function runningAgentRunsInChannel(serverId: string, channelId: string): Promise<RunningAgentRun[]> {
+  const rows = await db.select().from(schema.agentActivityLog).where(and(
+    eq(schema.agentActivityLog.serverId, serverId),
+    eq(schema.agentActivityLog.channelId, channelId),
+    isNotNull(schema.agentActivityLog.streamId),
+    isNull(schema.agentActivityLog.messageId),
+    gt(schema.agentActivityLog.ts, Date.now() - RUNNING_RUN_MAX_AGE_MS),
+  )).orderBy(asc(schema.agentActivityLog.runSeq), asc(schema.agentActivityLog.ts));
+  if (!rows.length) return [];
+
+  const agentIds = [...new Set(rows.map((row) => row.agentId))];
+  const ags = await db.select({
+    id: schema.agents.id, displayName: schema.agents.displayName,
+    status: schema.agents.status, machineId: schema.agents.machineId,
+  }).from(schema.agents).where(and(inArray(schema.agents.id, agentIds), isNull(schema.agents.deletedAt)));
+  const machineIds = [...new Set(ags.map((a) => a.machineId).filter((m): m is string => !!m))];
+  const machines = machineIds.length
+    ? await db.select({ id: schema.machines.id, status: schema.machines.status }).from(schema.machines).where(inArray(schema.machines.id, machineIds))
+    : [];
+  const machineOnline = new Set(machines.filter((m) => m.status === "online").map((m) => m.id));
+  const anyMachineOnline = machineOnline.size > 0
+    || (await db.select({ id: schema.machines.id }).from(schema.machines).where(and(eq(schema.machines.serverId, serverId), eq(schema.machines.status, "online"))).limit(1)).length > 0;
+
+  const byRun = new Map<string, { agentId: string; streamId: string; startedAt: number; items: AgentActivityItem[] }>();
+  for (const row of rows) {
+    const agent = ags.find((a) => a.id === row.agentId);
+    // Liveness guard: dropped/deactivated agents and offline machines can't be mid-run —
+    // their pending rows stay dormant until the agent's next message claims them.
+    // A machine-less agent (unbound daemon topology, e.g. seed:dev) passes on any online machine.
+    if (!agent || !["active", "starting", "queued"].includes(agent.status)) continue;
+    if (agent.machineId ? !machineOnline.has(agent.machineId) : !anyMachineOnline) continue;
+    const key = `${row.agentId}:${row.streamId}`;
+    const run = byRun.get(key) ?? { agentId: row.agentId, streamId: row.streamId!, startedAt: Number(row.ts), items: [] };
+    run.items.push(activityItem(row));
+    byRun.set(key, run);
+  }
+  return [...byRun.values()].map((run) => ({
+    ...run,
+    agentName: ags.find((a) => a.id === run.agentId)?.displayName ?? "Agent",
+  }));
 }
