@@ -117,6 +117,7 @@
 - [x] **Front-end static showcase page**: four case-study transcripts rendered purely client-side (`web/src/views/Showcase.tsx` + `web/src/showcaseData.ts`, sample files under `web/public/showcase/`); zero DB, zero prop agents, one shared copy for every visitor — no workspace data can leak through the demo. Replaced the former DB-backed `#showcase` channel + per-workspace seed (backend path deleted; `scripts/drop-showcase.mjs` cleans pre-existing rows)
 
 ## Agent Run Activity (动态)
+- [x] **Channel-scoped @-mention picker**: `GET /api/channels/:id/mention-candidates` (server single source of truth — members + the channel's @-reach pull-ins, thread inherits its parent, requester excluded); the composer lazy-fetches per channel (store cache, wiped on any membership change) and never falls back to a whole-workspace list — no more @-ing people the channel can't reach or @-ing yourself
 - [x] **Live run card survives page refresh / channel re-entry**: the newest-page `GET /api/messages/channel/:id` also returns `running[]` (per agent+streamId aggregates of unclaimed `agent_activity_log` rows, liveness-guarded: agent active/starting/queued + machine online + freshest row < 24h); the web client rebuilds the same `agent_reply_preview` pseudo-message the socket `op:start` path builds (already visible, no entry delay), backfills mid-run messages with rows newer than their last event, and later socket events/done keep appending/absorbing as before (`restoreRunningAgentRuns`)
 
 ## Web UI Polish
