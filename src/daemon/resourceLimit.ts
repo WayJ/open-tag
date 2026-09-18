@@ -29,6 +29,11 @@ export function applyResourceLimits(child: ChildProcess): void {
 // ── Windows (Job Object) ────────────────────────────────────────────────────
 
 const JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100;
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (winbase.h): every process in the job dies when the last job
+// handle closes. Without it, closing the handle (child exit / daemon shutdown) kills nothing and
+// orphaned runtime trees keep running with the workspace locked. Agents dying with the daemon (or
+// with their own runtime process's exit cleanup) is the intended semantic.
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x1;
 const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x4;
 const JOB_OBJECT_CPU_RATE_CONTROL_SOFT_CAP = 0x8;
@@ -137,6 +142,26 @@ function setupWin32Job(child: ChildProcess): void {
   if (typeof jobHandle !== "bigint" || jobHandle === 0n) {
     log.error("CreateJobObjectW failed", { pid });
     return;
+  }
+
+  // Kill-on-close must be set at creation: when the handle closes (child exit cleanup below, or
+  // daemon shutdown), the whole runtime tree dies instead of surviving as orphans. Note
+  // SetInformationJobObject REPLACES LimitFlags, so applyWin32Pressure must keep OR-ing this in.
+  if (!a.SetExtendedLimitInfo(jobHandle, JobObjectExtendedLimitInformation, {
+    BasicLimitInformation: {
+      PerProcessUserTimeLimit: 0n, PerJobUserTimeLimit: 0n,
+      LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+      MinimumWorkingSetSize: 0n, MaximumWorkingSetSize: 0n,
+      ActiveProcessLimit: 0, Affinity: 0n, PriorityClass: 0, SchedulingClass: 0,
+    },
+    IoInfo: {
+      ReadOperationCount: 0n, WriteOperationCount: 0n, OtherOperationCount: 0n,
+      ReadTransferCount: 0n, WriteTransferCount: 0n, OtherTransferCount: 0n,
+    },
+    ProcessMemoryLimit: 0n, JobMemoryLimit: 0n,
+    PeakProcessMemoryUsed: 0n, PeakJobMemoryUsed: 0n,
+  }, koffi.sizeof(a.ExtendedLimitInfo))) {
+    log.warn("SetInformationJobObject(KILL_ON_JOB_CLOSE) failed", { pid });
   }
 
   const procHandle = a.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
@@ -266,7 +291,8 @@ function applyWin32Pressure(pid: number, currentMB: number, marginMB: number): v
     BasicLimitInformation: {
       PerProcessUserTimeLimit: z,
       PerJobUserTimeLimit: z,
-      LimitFlags: JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+      // Keep KILL_ON_JOB_CLOSE: setting LimitFlags REPLACES all flags (see setupWin32Job).
+      LimitFlags: JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
       MinimumWorkingSetSize: z,
       MaximumWorkingSetSize: z,
       ActiveProcessLimit: 0, Affinity: z, PriorityClass: 0, SchedulingClass: 0,

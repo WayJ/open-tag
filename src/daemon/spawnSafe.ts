@@ -45,13 +45,19 @@ export function resolveWindowsCommand(command: string, options: SpawnOptions, is
 
 export function spawnSafe(command: string, args: string[], options: SpawnOptions): ChildProcess {
   let child: ChildProcess;
+  // Non-Windows: runtimes spawn detached so they lead their own process group — killTree's group
+  // kill (process.kill(-pid)) only reaches bash-tool grandchildren when the runtime owns a group;
+  // without it the group kill fails and grandchildren survive as orphans (writing the workspace,
+  // cgroup rmdir EBUSY). Windows must NOT set detached: it opens console windows and breaks the
+  // Job Object semantics (tree kill there is taskkill /T + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).
+  const platformOptions: SpawnOptions = process.platform === "win32" ? options : { detached: true, ...options };
   if (process.platform === "win32" && !options.shell) {
     const resolved = resolveWindowsCommand(command, options);
     // cross-spawn launches cmd.exe for an unresolved command, emitting a misleading
     // spawn event before it later converts exit 1 to ENOENT. Native spawn fails first.
-    child = resolved ? crossSpawn(resolved, args, options) : nodeSpawn(command, args, options);
+    child = resolved ? crossSpawn(resolved, args, platformOptions) : nodeSpawn(command, args, platformOptions);
   } else {
-    child = crossSpawn(command, args, options);
+    child = crossSpawn(command, args, platformOptions);
   }
   applyResourceLimits(child);
   log.debug("spawned", { pid: child.pid, cmd: command });
