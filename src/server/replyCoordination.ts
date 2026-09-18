@@ -217,7 +217,10 @@ export async function releaseUnavailableReplyGrant(messageId: string, agentId: s
   }).where(and(
     eq(schema.agentMessageDecisions.messageId, messageId),
     eq(schema.agentMessageDecisions.agentId, agentId),
-    inArray(schema.agentMessageDecisions.grantStatus, ["reserved", "active"]),
+    // "publishing" is included: a recipient that reserved its reply slot and then died between
+    // reserve and publish (crash / daemon restart) used to strand the grant in publishing,
+    // permanently orphaning the trigger's primary slot. Consumed (published) stays untouched.
+    inArray(schema.agentMessageDecisions.grantStatus, ["reserved", "active", "publishing"]),
   ));
 }
 

@@ -334,7 +334,11 @@ class ReasonixRun {
       this.cb.onTrajectory([{ kind: "text", text: "[reasonix error] " + clip(tail).slice(0, 500) }]);
       this.cb.onActivity("error", last.slice(0, 200));
       if (!this.everSucceeded) { this.rejectQueue(new Error(last)); this.reportExit(code ?? 1); return; } // first-turn hard failure → crashed
-      this.pump(); // later-turn failure → keep the session alive so the next message can retry
+      // A later turn failed terminally: report it so the daemon settles the turn (turnActive=false)
+      // instead of piling every delivery into the queue forever, then keep the session alive so the
+      // next message can retry — mirrors the one-shot failure contract of copilot/opencode/pi.
+      this.cb.onAcceptedTurnFailure?.(input);
+      this.pump();
     });
   }
 

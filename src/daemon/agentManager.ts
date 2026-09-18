@@ -22,6 +22,11 @@ const DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_DELIVER_DEBOUNCE_MS ?? 3
 const ONE_SHOT_DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_ONE_SHOT_DELIVER_DEBOUNCE_MS ?? process.env.OPEN_TAG_HERMES_DELIVER_DEBOUNCE_MS ?? 500); // One-shot runtimes need a short fixed wait when there is only one live notice.
 const PENDING_DELIVER_TTL_MS = Number(process.env.OPEN_TAG_PENDING_DELIVER_TTL_MS ?? 15_000); // start+deliver can arrive back-to-back; keep deliver briefly while start prepares workspace
 const MEMORY_UPLOAD_DEBOUNCE_MS = Number(process.env.OPEN_TAG_MEMORY_UPLOAD_DEBOUNCE_MS ?? 2000); // turn-end quiet window before the managed-memory snapshot is read + uploaded
+// How long startNow() waits for the runtime's initial turn admission before failing the start. A
+// runtime that spawns but never admits (expired claude auth, proxy blackhole) would otherwise pin
+// the scope in "starting" forever and leak its budget slot — the idle timer only arms AFTER
+// admission, so nothing else would ever clean it up.
+const START_ADMISSION_TIMEOUT_MS = Number(process.env.OPEN_TAG_START_ADMISSION_TIMEOUT_MS ?? 3 * 60_000);
 
 /** Session scope carried in the daemon protocol: one persistent runtime session per (agent, channel|thread). */
 export interface AgentScope { type: "channel" | "thread"; id: string; sessionId: string | null }
@@ -65,6 +70,7 @@ interface AgentManagerOptions {
   beforeRuntimeDelivery?: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   machineId?: string; // stable machine identity, uplinked with each memory snapshot (wire symmetry; the server uses the connection identity)
   memoryUploadDebounceMs?: number;
+  admissionTimeoutMs?: number; // startNow aborts (failStart path) if the runtime never admits the initial turn
   // Daemon-initiated managed-memory fetch ("memory:get" RPC → "memory:data" waiter, wired in
   // index.ts). Resolves the server snapshot, or undefined on timeout / no row — the restore then
   // behaves exactly as "no server row". Undefined option → restore never pulls (skip-only).
@@ -101,6 +107,7 @@ export class AgentManager {
   private beforeRuntimeDelivery: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   private machineId?: string;
   private memoryUploadDebounceMs: number;
+  private admissionTimeoutMs: number;
   private fetchMemory: (agentId: string) => Promise<Record<string, string> | undefined>;
   private budget: ResourceBudget;
   private startQueue: QueuedStart[] = [];
@@ -118,6 +125,7 @@ export class AgentManager {
     this.beforeRuntimeDelivery = opts.beforeRuntimeDelivery ?? (async () => {});
     this.machineId = opts.machineId;
     this.memoryUploadDebounceMs = opts.memoryUploadDebounceMs ?? MEMORY_UPLOAD_DEBOUNCE_MS;
+    this.admissionTimeoutMs = opts.admissionTimeoutMs ?? START_ADMISSION_TIMEOUT_MS;
     this.fetchMemory = opts.fetchMemory ?? (async () => undefined);
     // Memory pressure monitor: every 10s, cap running agents if free < 500 MB
     const pressureTimer = setInterval(() => this.checkMemoryPressure(), 10_000);
@@ -366,7 +374,14 @@ export class AgentManager {
   private resetIdle(key: string): void {
     const r = this.agents.get(key); if (!r) return;
     if (r.idleTimer) clearTimeout(r.idleTimer);
-    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs }); void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, this.idleMs);
+    r.idleTimer = setTimeout(() => {
+      // INVARIANT: idle means BETWEEN turns. A quiet stretch mid-turn (a long tool call, a slow
+      // codex turn) is not idle's business — kill it and we murder working agents. While
+      // turnActive, re-arm and keep waiting; activity/trajectory events keep resetting this timer.
+      if (this.agents.get(key)?.turnActive) { this.resetIdle(key); return; }
+      this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs });
+      void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) }));
+    }, this.idleMs);
   }
 
   /** Debounced managed-memory uplink: every turn end (any scope) re-arms one agent-granular timer, so
@@ -679,7 +694,9 @@ export class AgentManager {
           this.finishReplyPreview(key);
         }
       },
-      onTrajectory: (entries) => { this.sendAgentTrajectory(key, entries); },
+      // Trajectory is activity too: codex emits ONLY trajectory during turns, so without this
+      // reset the idle timer would fire mid-turn on exactly the runtimes that stream progress.
+      onTrajectory: (entries) => { this.resetIdle(key); this.sendAgentTrajectory(key, entries); },
       onExit: (code) => {
         this.log.info("agent exited", { agentId, key, code });
         const exitError = new Error(`runtime exited before delivery admission (${code ?? "signal"})`);
@@ -733,7 +750,14 @@ export class AgentManager {
     }
     running.pid = running.session.pid ?? 0;
 
-    await running.initialAdmission.promise;
+    // Bounded wait: a spawned-but-never-admitting runtime (expired auth, blackholed proxy) must not
+    // hold the scope in "starting" forever. The throw lands in failStart (via launchStart), which
+    // stops the process, releases the budget slot, and rejects pending deliveries.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`runtime initial turn admission timed out after ${this.admissionTimeoutMs}ms: ${agentId}`)), this.admissionTimeoutMs);
+      timer.unref?.();
+      running.initialAdmission.promise.then(() => { clearTimeout(timer); resolve(); }, (error) => { clearTimeout(timer); reject(error); });
+    });
     this.assertStartActive(key, attempt);
     if (this.agents.get(key) !== running) throw new Error(`runtime exited before start completed: ${agentId}`);
 
@@ -790,6 +814,10 @@ export class AgentManager {
     const running = this.agents.get(key);
     if (running?.idleTimer) clearTimeout(running.idleTimer);
     if (running) this.rejectBufferedDeliveries(running, error);
+    // Reject pending delivers BEFORE awaiting the runtime's exit: a runtime that flushes its init
+    // line during the teardown window would otherwise resolve the first pending admission through
+    // acceptPendingStartup — a spurious ACK for work that is about to be torn down.
+    this.rejectPendingDeliverKey(key, error);
     if (running) {
       this.agents.delete(key);
       try { running.session?.stop(); } catch { /* preserve the original startup error */ }
@@ -797,7 +825,6 @@ export class AgentManager {
       await running.exit.promise.catch(() => {});
     }
     this.finishReplyPreview(key, "error");
-    this.rejectPendingDeliverKey(key, error);
     this.log.warn("agent start failed", { agentId, key, detail: String(error) });
   }
 

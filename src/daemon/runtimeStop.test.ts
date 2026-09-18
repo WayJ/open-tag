@@ -10,6 +10,7 @@ import { hermesRuntime } from "./hermesRuntime.js";
 import { kimiRuntime } from "./kimiRuntime.js";
 import { opencodeRuntime } from "./opencodeRuntime.js";
 import { piRuntime } from "./piRuntime.js";
+import { reasonixRuntime } from "./reasonixRuntime.js";
 
 const adapters: Array<{ command: string; runtime: Runtime }> = [
   { command: "copilot", runtime: copilotRuntime },
@@ -18,6 +19,7 @@ const adapters: Array<{ command: string; runtime: Runtime }> = [
   { command: "kimi", runtime: kimiRuntime },
   { command: "opencode", runtime: opencodeRuntime },
   { command: "pi", runtime: piRuntime },
+  { command: "reasonix", runtime: reasonixRuntime },
 ];
 
 async function waitFor(predicate: () => boolean, label: string): Promise<void> {
@@ -168,7 +170,7 @@ const count = (fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0) 
 fs.writeFileSync(file, String(count));
 if (count === 2) { console.error("accepted turn failed"); process.exit(1); }
 `;
-  for (const runtime of [copilotRuntime, cursorRuntime, hermesRuntime, kimiRuntime, opencodeRuntime, piRuntime]) {
+  for (const runtime of [copilotRuntime, cursorRuntime, hermesRuntime, kimiRuntime, opencodeRuntime, piRuntime, reasonixRuntime]) {
     const adapter = adapters.find((candidate) => candidate.runtime === runtime)!;
     await t.test(runtime.name, () => assertAcceptedFailureKeepsSessionReusable(adapter, source));
   }

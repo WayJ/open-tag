@@ -32,6 +32,47 @@ from `main`; see commit history for fine-grained server/web changes.
   daemon-initiated RPC (an old server silently drops it; the daemon's timeout fallback treats
   the restore as "no server row").
 
+### Fixed
+
+> Bullets 1–4 span `src/daemon/**` (shipped in the bundle): they reach `npx
+> @fancyboi999/open-tag-daemon` machines only with the **next daemon package release**
+> (release pending — no version bump in this batch per maintainer policy). Bullet 5 is
+> server-side and ships continuously from `main`.
+
+- **Idle-sleep no longer kills a quiet mid-turn scope** — the `IDLE_MS` timer fired
+  `sleepScope` unconditionally, so a turn that stayed quiet longer than the idle window
+  (a long tool call, a slow codex turn) was killed mid-work. The timer now re-arms while
+  the turn is active (idle means *between* turns), and `onTrajectory` resets the timer so
+  trajectory-only runtimes (codex) keep it fed during turns. `src/daemon/agentManager.ts`.
+- **Starting admission now times out** — a runtime that spawned but never admitted the
+  initial turn (expired claude auth, blackholed proxy) pinned the scope in "starting"
+  forever and leaked its budget slot (the idle timer only arms after admission). The wait
+  is bounded (`START_ADMISSION_TIMEOUT_MS`, default 3 min, env
+  `OPEN_TAG_START_ADMISSION_TIMEOUT_MS`); on timeout the start fails via the failStart
+  path: process stopped, budget released, pending deliveries rejected so the server can
+  retry. `src/daemon/agentManager.ts`.
+- **reasonix reports later-turn failures** — reasonix was the only runtime that never
+  called `cb.onAcceptedTurnFailure`: after a failed later turn (non-zero exit) it kept
+  the session with the daemon's `turnActive` stuck true, so every following delivery
+  piled into the queue with nothing to process it. It now reports the failure terminal
+  and keeps the session reusable, mirroring the one-shot failure contract of
+  copilot/opencode/pi. `src/daemon/reasonixRuntime.ts`.
+- **`killTree` actually reaches the runtime process tree** — Linux: runtimes were spawned
+  without `detached`, so they never led a process group and the group kill
+  (`process.kill(-pid)`) always failed, orphaning bash-tool grandchildren (kept writing
+  the workspace; cgroup `rmdir` hit `EBUSY`). Runtimes now spawn detached on non-Windows
+  (Windows stays non-detached — console windows / Job Object semantics). Windows: the Job
+  Object was created without `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (0x2000), so closing
+  the job handle killed nothing; the flag is now set at creation and preserved through
+  the pressure-cap update. Verified live on Windows (orphaned grandchild reaped on job
+  close); Linux behavior by inspection.
+  `src/daemon/spawnSafe.ts` / `src/daemon/resourceLimit.ts`.
+- **Crash-orphaned `publishing` reply grants are releasable** —
+  `releaseUnavailableReplyGrant` matched only `reserved|active`, so a grant stranded in
+  `publishing` (recipient reserved its reply slot, then died between reserve and publish)
+  could never be released, permanently orphaning the trigger's primary slot. `publishing`
+  is now included; `consumed` stays untouched. `src/server/replyCoordination.ts`.
+
 ## [0.15.1] — 2026-09-17
 
 ### Fixed
