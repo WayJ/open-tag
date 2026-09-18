@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { browseProjectDirectories, ProjectDirectoryError, resolveProjectDirectory } from "./projectDirectory.js";
+import { linkDirSync } from "./testLinks.js";
 
 function withRoots(roots: string[]): () => void {
   const before = process.env.OPEN_TAG_PROJECT_ROOTS;
@@ -24,8 +25,8 @@ test("project resolution is fail-closed, canonical, and cannot escape shared roo
   const escape = path.join(root, "escape");
   mkdirSync(project, { recursive: true });
   mkdirSync(outside);
-  symlinkSync(project, link, "dir");
-  symlinkSync(outside, escape, "dir");
+  linkDirSync(project, link);
+  linkDirSync(outside, escape);
   const restore = withRoots([root]);
   try {
     assert.equal(await resolveProjectDirectory(project), await realpath(project));
@@ -71,7 +72,7 @@ test("a configured root symlink returns canonical paths that resolve on the next
   const alias = path.join(base, "alias");
   const child = path.join(actual, "child");
   mkdirSync(child, { recursive: true });
-  symlinkSync(actual, alias, "dir");
+  linkDirSync(actual, alias);
   const restore = withRoots([alias]);
   try {
     const roots = await browseProjectDirectories({});
@@ -158,7 +159,7 @@ test("browser lists only safe directories with stable bounded pagination", async
   const outside = path.join(base, "outside");
   for (const name of ["alpha", "bravo", ".hidden", ".ssh", "Library", "node_modules"]) mkdirSync(path.join(root, name), { recursive: true });
   mkdirSync(outside);
-  symlinkSync(outside, path.join(root, "linked-outside"), "dir");
+  linkDirSync(outside, path.join(root, "linked-outside"));
   const restore = withRoots([root]);
   try {
     const roots = await browseProjectDirectories({});
@@ -190,7 +191,7 @@ test("discovery checks marker names only, skips symlinks and hidden trees, and i
   writeFileSync(path.join(outside, "go.mod"), "");
   writeFileSync(path.join(depth4, "Cargo.toml"), "");
   writeFileSync(path.join(depth5, "go.mod"), "");
-  symlinkSync(outside, path.join(root, "linked-project"), "dir");
+  linkDirSync(outside, path.join(root, "linked-project"));
   const restore = withRoots([root]);
   try {
     const result = await browseProjectDirectories({ discover: true, limit: 20 });

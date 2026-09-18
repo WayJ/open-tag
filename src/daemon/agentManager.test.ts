@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { AgentManager, type AgentConfig } from "./agentManager.js";
 import { ResourceBudget } from "./resourceBudget.js";
+import { linkDirSync, linkFileSync } from "./testLinks.js";
 import type { Runtime, RuntimeCallbacks, StartOpts } from "./runtime.js";
 
 const noPressureBudget = new ResourceBudget({ availableMemMB: () => 999999 });
@@ -1100,14 +1101,14 @@ test("reset rejects when workspace cleanup fails instead of acknowledging a fals
   }
 });
 
-test("clearMemory atomically replaces a MEMORY.md symlink without touching its target", async () => {
+test("clearMemory atomically replaces a MEMORY.md symlink without touching its target", async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "open-tag-agent-manager-reset-memory-link-"));
   const agentId = "reset-memory-link";
   const dir = path.join(root, agentId);
   const outside = path.join(root, "outside-memory.md");
   mkdirSync(dir);
   writeFileSync(outside, "outside memory\n");
-  symlinkSync(outside, path.join(dir, "MEMORY.md"));
+  if (linkFileSync(outside, path.join(dir, "MEMORY.md")) === "eperm") return t.skip("file symlinks need Developer Mode or admin on Windows — no unprivileged equivalent exists");
   try {
     const mgr = new AgentManager(() => {}, { dataDir: root, binDir: root, budget: noPressureBudget, runtimeResolver: () => null });
     await mgr.reset(agentId, false, true);
@@ -1120,14 +1121,14 @@ test("clearMemory atomically replaces a MEMORY.md symlink without touching its t
   }
 });
 
-test("syncProfile never reads or writes through a MEMORY.md symlink", async () => {
+test("syncProfile never reads or writes through a MEMORY.md symlink", async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "open-tag-agent-manager-profile-memory-link-"));
   const agentId = "profile-memory-link";
   const dir = path.join(root, agentId);
   const outside = path.join(root, "outside-memory.md");
   mkdirSync(dir);
   writeFileSync(outside, "# Outside\n\n## Role\nsecret\n");
-  symlinkSync(outside, path.join(dir, "MEMORY.md"));
+  if (linkFileSync(outside, path.join(dir, "MEMORY.md")) === "eperm") return t.skip("file symlinks need Developer Mode or admin on Windows — no unprivileged equivalent exists");
   try {
     const mgr = new AgentManager(() => {}, { dataDir: root, binDir: root, budget: noPressureBudget, runtimeResolver: () => null });
     await mgr.syncProfile(agentId, "Changed", "changed role");
@@ -1144,7 +1145,7 @@ test("start rejects a symlinked agent state directory before writing or spawning
   const outside = mkdtempSync(path.join(tmpdir(), "open-tag-agent-manager-state-link-outside-"));
   const agentId = "linked-state";
   let starts = 0;
-  symlinkSync(outside, path.join(root, agentId), "dir");
+  linkDirSync(outside, path.join(root, agentId));
   const fakeRuntime: Runtime = {
     name: "fake",
     start() { starts++; return { deliver: async () => {}, stop: () => {} }; },

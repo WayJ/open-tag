@@ -1,8 +1,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { linkDirSync } from "./testLinks.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "ws-test-"));
 process.env.OPEN_TAG_HOME = join(tmp, "open-tag");
@@ -125,7 +126,7 @@ test("workspace read and write reject a symlinked parent that escapes agent stat
   const outside = join(tmp, "outside-workspace-parent");
   mkdirSync(outside);
   writeFileSync(join(outside, "secret.txt"), "outside secret");
-  symlinkSync(outside, join(DATA_DIR, AGENT_ID, "escape"), "dir");
+  linkDirSync(outside, join(DATA_DIR, AGENT_ID, "escape"));
 
   const read = await readWorkspaceFile(AGENT_ID, "escape/secret.txt");
   assert.match(read.error ?? "", /escapes|symbolic link/);
@@ -142,7 +143,7 @@ test("workspace write rejects an agent state directory symlink", async () => {
   const outside = join(tmp, "outside-agent-root");
   const linkedAgent = "linked-agent";
   mkdirSync(outside);
-  symlinkSync(outside, join(DATA_DIR, linkedAgent), "dir");
+  linkDirSync(outside, join(DATA_DIR, linkedAgent));
 
   const write = await writeWorkspaceFile(linkedAgent, "MEMORY.md", "escaped write");
   assert.match(write.error ?? "", /symbolic link/);
