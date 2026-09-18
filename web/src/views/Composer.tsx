@@ -5,9 +5,9 @@ import { useStore, type Agent } from "../store.tsx";
 import { Avatar, resolveAvatar } from "../Avatar.tsx";
 import { IconFile } from "../icons.tsx";
 import { useToast } from "../toast.tsx";
+import { filterMentionCandidates, handleKey } from "../lib/mentionCandidates";
 
 const isImage = (m?: string) => !!m && m.startsWith("image/");
-const handleKey = (s: string) => s.normalize("NFC").toLowerCase();
 
 export function canSendComposerDraft(text: string, pendingAtts: { status?: string }[]): boolean {
   return pendingAtts.every((a) => a.status === "done") && (!!text.trim() || pendingAtts.length > 0);
@@ -27,7 +27,7 @@ export function Composer({ channelId, placeholder, allowAsTask = false, dmAgent,
 }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const { api, visibleAgents: agents, humans, machines, uploadOne, attachmentUrl } = useStore(); // visibleAgents: only real agents are @-mention candidates / reachability targets (not showcase demo props)
+  const { api, visibleAgents: agents, machines, uploadOne, attachmentUrl, mentionCandidatesByChannel, loadMentionCandidates } = useStore(); // visibleAgents: reachability targets for the offline/sleep hint (candidates themselves are server-authored per channel)
   const avFor = (u?: string | null) => resolveAvatar(u, attachmentUrl);
   const [text, setText] = useState("");
   const [asTask, setAsTask] = useState(false);
@@ -117,8 +117,13 @@ export function Composer({ channelId, placeholder, allowAsTask = false, dmAgent,
   const onPaste = (e: RClipboardEvent) => { const imgs = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/")).map((f, i) => new File([f], `pasted-${Date.now()}${i ? "-" + i : ""}.${f.type.split("/")[1] || "png"}`, { type: f.type })); if (imgs.length) { e.preventDefault(); addFiles(imgs); } };
   const onDrop = (e: RDragEvent) => { const fs = Array.from(e.dataTransfer?.files ?? []); if (fs.length) { e.preventDefault(); addFiles(fs); } };
 
-  // @ mention autocomplete: candidates are all workspace agents + humans (not just current channel members) —
-  // in a public channel, @-ing a non-member pulls them in (server-side auto-join), so suggesting them is intended.
+  // @ mention autocomplete: candidates come from the server's channel-scoped pool
+  // (GET /api/channels/:id/mention-candidates — members + the channel's @-reach pull-ins, minus
+  // me), lazily fetched on the first @ and cached in the store; a failed fetch is fail-closed (no
+  // candidates) rather than falling back to a whole-workspace guess that used to suggest
+  // non-members in private channels/DMs (whose @ the server silently drops) and myself.
+  const channelCandidates = mentionCandidatesByChannel[channelId];
+  useEffect(() => { if (atQuery !== null && channelCandidates === undefined) void loadMentionCandidates(channelId); }, [atQuery, channelId, channelCandidates, loadMentionCandidates]);
   const onInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value; setText(v);
     const pos = e.target.selectionStart ?? v.length;
@@ -126,10 +131,8 @@ export function Composer({ channelId, placeholder, allowAsTask = false, dmAgent,
     if (m) { setAtQuery(m[1]); atPosRef.current = pos - m[0].length; } else setAtQuery(null);
     setAtSel(0); // typing narrows the list → restart highlight at the top
   };
-  const cands = atQuery === null ? [] : [
-    ...agents.map((a) => ({ name: a.name, label: a.displayName || a.name, kind: "agent", avatarUrl: a.avatarUrl })),
-    ...humans.map((h) => ({ name: h.name, label: h.displayName || h.name, kind: "human", avatarUrl: h.avatarUrl })),
-  ].filter((c) => c.name && handleKey(c.name).includes(handleKey(atQuery || ""))).slice(0, 8);
+  const cands = (atQuery === null ? [] : filterMentionCandidates(channelCandidates ?? [], atQuery))
+    .map((c) => ({ ...c, label: c.displayName || c.name }));
   const pick = (c: { name: string }) => {
     if (sendingRef.current) return;
     const start = atPosRef.current;
