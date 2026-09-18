@@ -16,7 +16,11 @@ for svc in server daemon; do
   if [ -f "$f" ]; then
     pid=$(cat "$f")
     if command -v taskkill >/dev/null 2>&1; then
-      taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  stopped $svc (tree $pid)" || echo "  $svc not running"
+      # $! in MSYS bash is an msys pid; taskkill needs the Windows pid (/proc/<pid>/winpid).
+      # Tree-kill takes the npx → tsx → node grandchildren with it. (MSYS pkill cannot see
+      # native node.exe processes at all — the old sweep never matched anything on Windows.)
+      wpid=$(cat "/proc/$pid/winpid" 2>/dev/null || echo "$pid")
+      taskkill //F //T //PID "$wpid" >/dev/null 2>&1 && echo "  stopped $svc (tree $wpid)" || echo "  $svc not running"
     else
       pkill -f "$PWD/src/$svc/index.ts" 2>/dev/null || true
       kill "$pid" 2>/dev/null && echo "  stopped $svc ($pid)" || echo "  $svc not running"
