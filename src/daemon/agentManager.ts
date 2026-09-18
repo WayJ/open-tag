@@ -814,6 +814,10 @@ export class AgentManager {
     const running = this.agents.get(key);
     if (running?.idleTimer) clearTimeout(running.idleTimer);
     if (running) this.rejectBufferedDeliveries(running, error);
+    // Reject pending delivers BEFORE awaiting the runtime's exit: a runtime that flushes its init
+    // line during the teardown window would otherwise resolve the first pending admission through
+    // acceptPendingStartup — a spurious ACK for work that is about to be torn down.
+    this.rejectPendingDeliverKey(key, error);
     if (running) {
       this.agents.delete(key);
       try { running.session?.stop(); } catch { /* preserve the original startup error */ }
@@ -821,7 +825,6 @@ export class AgentManager {
       await running.exit.promise.catch(() => {});
     }
     this.finishReplyPreview(key, "error");
-    this.rejectPendingDeliverKey(key, error);
     this.log.warn("agent start failed", { agentId, key, detail: String(error) });
   }
 
