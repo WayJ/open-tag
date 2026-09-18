@@ -5,6 +5,7 @@ import "../env.js"; // must be first: loads project root .env (does not override
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { Connection } from "./connection.js";
 import { AgentManager } from "./agentManager.js";
 import { listWorkspace, readWorkspaceFile, writeWorkspaceFile, deleteWorkspaceFile, listSkills } from "./workspace.js";
@@ -18,6 +19,10 @@ import { browseProjectDirectories, ProjectDirectoryError, resolveProjectDirector
 const log = createLogger("daemon");
 const DELIVERY_PENDING_HEARTBEAT_MS = Math.max(250, Number(process.env.OPEN_TAG_DELIVERY_PENDING_HEARTBEAT_MS ?? 750));
 const DELIVERY_COMMIT_TIMEOUT_MS = Math.max(2_000, Number(process.env.OPEN_TAG_DELIVERY_COMMIT_TIMEOUT_MS ?? 15_000));
+// Managed-memory restore fetch ("memory:get"): ONE send, no retry/heartbeat — unlike the delivery
+// commit waiters below, this RPC is strung across the agent startup path, so a lost answer must
+// abandon the restore (handled as "no server row" → seed as usual) rather than delay every start.
+const MEMORY_GET_TIMEOUT_MS = Math.max(1_000, Number(process.env.OPEN_TAG_MEMORY_GET_TIMEOUT_MS ?? 5_000));
 const args = process.argv.slice(2);
 let serverUrl = "", apiKey = "";
 for (let i = 0; i < args.length; i++) {
@@ -77,7 +82,38 @@ function settleDeliveryCommit(deliveryId: unknown, error?: unknown): void {
   else waiter.resolve();
 }
 
-const mgr = new AgentManager((m) => conn.send(m), { beforeRuntimeDelivery: requestDeliveryCommit });
+const mgr = new AgentManager((m) => conn.send(m), { beforeRuntimeDelivery: requestDeliveryCommit, machineId: readMachineId(), fetchMemory: fetchServerMemory });
+
+// ── Managed-memory restore fetch ("memory:get" → "memory:data") ────────────────────────────────
+interface MemoryDataWaiter { resolve: (files: Record<string, string> | undefined) => void; timer: ReturnType<typeof setTimeout>; }
+const memoryDataWaiters = new Map<string, MemoryDataWaiter>();
+
+function fetchServerMemory(agentId: string): Promise<Record<string, string> | undefined> {
+  const requestId = `memget-${randomUUID()}`;
+  let settle!: (files: Record<string, string> | undefined) => void;
+  const promise = new Promise<Record<string, string> | undefined>((res) => { settle = res; });
+  const waiter: MemoryDataWaiter = {
+    resolve: (files) => { clearTimeout(waiter.timer); memoryDataWaiters.delete(requestId); settle(files); },
+    timer: undefined as unknown as ReturnType<typeof setTimeout>,
+  };
+  waiter.timer = setTimeout(() => {
+    if (memoryDataWaiters.get(requestId) !== waiter) return;
+    memoryDataWaiters.delete(requestId);
+    log.warn("memory:get timed out — skipping memory restore", { agentId, requestId });
+    settle(undefined);
+  }, MEMORY_GET_TIMEOUT_MS);
+  waiter.timer.unref?.();
+  memoryDataWaiters.set(requestId, waiter);
+  conn.send({ type: "memory:get", requestId, agentId });
+  return promise;
+}
+
+function settleMemoryData(requestId: unknown, files: unknown): void {
+  if (typeof requestId !== "string") return;
+  const waiter = memoryDataWaiters.get(requestId);
+  if (!waiter) return;
+  waiter.resolve(files && typeof files === "object" && !Array.isArray(files) ? files as Record<string, string> : {});
+}
 
 function runAgentControl(msg: any, operation: () => void | Promise<void>): void {
   void mgr.runControl(msg.agentId, operation).then(
@@ -98,6 +134,7 @@ conn = new Connection(serverUrl, apiKey, (msg) => {
     case "ready:ack": if (typeof msg.machineId === "string" && msg.machineId) saveMachineId(msg.machineId); break;
     case "agent:deliver:admitted": settleDeliveryCommit(msg.deliveryId); break;
     case "agent:deliver:rejected": settleDeliveryCommit(msg.deliveryId, msg.error ?? "server rejected delivery admission"); break;
+    case "memory:data": settleMemoryData(msg.requestId, msg.files); break;
     // Agent dials the same server URL this daemon connected with (proven reachable), overriding the
     // server-reported config.serverUrl (SELF_URL = localhost:PORT on the server box — wrong whenever the
     // daemon runs on a different host than the server, e.g. local daemon ↔ getopentag.com).
@@ -144,6 +181,10 @@ conn = new Connection(serverUrl, apiKey, (msg) => {
 }, () => {
   const runtimes = detectRuntimes();
   log.info("ready", { runtimes, hostname: os.hostname() });
+  // Fresh WS connection → drop the upload digest cache: a snapshot sent just before the previous
+  // connection dropped may never have landed, so the next turn end must re-upload (the upsert is
+  // idempotent — a redundant resend is harmless).
+  mgr.clearMemoryUploadCache();
   conn.send({
     type: "ready", capabilities: ["agent:start", "agent:stop", "agent:sleep", "agent:reset", "agent:profile", "agent:deliver", "agent:workspace", "resource:limits", DELIVERY_ADMISSION_CAPABILITY, AGENT_CONTROL_ACK_CAPABILITY, PROJECT_DIRECTORY_CAPABILITY, PROJECT_BROWSER_CAPABILITY],
     runtimes, runningAgents: mgr.running(), hostname: os.hostname(), os: `${os.platform()} ${os.arch()}`, daemonVersion: process.env.DAEMON_VERSION ?? "dev",

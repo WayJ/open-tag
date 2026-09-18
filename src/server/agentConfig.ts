@@ -28,6 +28,12 @@ export async function agentConfig(agentId: string, scopeCtx?: ScopeContext) {
   )))[0];
   if (!agent) return null;
 
+  // Managed-memory digest only — selecting the varchar column (never the jsonb files) keeps the
+  // hot dispatch path free of a detoast. A row-less agent omits the key entirely, which is also
+  // how the daemon's restore logic distinguishes "no server row" from "row with an empty snapshot".
+  const mem = (await db.select({ memoryDigest: schema.agentMemory.memoryDigest })
+    .from(schema.agentMemory).where(eq(schema.agentMemory.agentId, agent.id)))[0];
+
   let token = rawTokens.get(agent.id);
   if (!token && !(agent.status === "active" && agent.agentTokenHash)) {
     token = newKey("sk_agent_");
@@ -63,6 +69,7 @@ export async function agentConfig(agentId: string, scopeCtx?: ScopeContext) {
     runtimeConfig: agent.runtimeConfig,
     sessionId: agent.sessionId ?? undefined,
     ...(scope ? { scope } : {}),
+    ...(mem ? { memoryDigest: mem.memoryDigest } : {}),
     serverUrl,
     serverId: agent.serverId,
     agentId: agent.id,
