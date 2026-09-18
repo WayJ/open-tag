@@ -116,5 +116,8 @@
 ## Showcase (static demo page)
 - [x] **Front-end static showcase page**: four case-study transcripts rendered purely client-side (`web/src/views/Showcase.tsx` + `web/src/showcaseData.ts`, sample files under `web/public/showcase/`); zero DB, zero prop agents, one shared copy for every visitor — no workspace data can leak through the demo. Replaced the former DB-backed `#showcase` channel + per-workspace seed (backend path deleted; `scripts/drop-showcase.mjs` cleans pre-existing rows)
 
+## Agent Run Activity (动态)
+- [x] **Live run card survives page refresh / channel re-entry**: the newest-page `GET /api/messages/channel/:id` also returns `running[]` (per agent+streamId aggregates of unclaimed `agent_activity_log` rows, liveness-guarded: agent active/starting/queued + machine online + freshest row < 24h); the web client rebuilds the same `agent_reply_preview` pseudo-message the socket `op:start` path builds (already visible, no entry delay), backfills mid-run messages with rows newer than their last event, and later socket events/done keep appending/absorbing as before (`restoreRunningAgentRuns`)
+
 ## Web UI Polish
 - [x] **Icon micro-interactions (Amicro-style, pure CSS)**: semantic hover motion on interactive icons via one shared overshoot curve (`--im-spring`) and a two-class API (`im` trigger + `im-*` effect), zero JS/deps (`web/src/iconMotion.css`); hover-capable devices only + `prefers-reduced-motion` respected; principles + usage rules in `docs/icon-motion.md`

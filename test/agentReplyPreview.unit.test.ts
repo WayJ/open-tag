@@ -7,6 +7,7 @@ import {
   applyAgentReplyPreview,
   hasStreamingAgentReplyPreview,
   mergePersistedAgentMessageUpdate,
+  restoreRunningAgentRuns,
   tickAgentReplyPreviews,
   AGENT_REPLY_PREVIEW_DELAY_MS,
   AGENT_REPLY_PREVIEW_TYPE,
@@ -232,6 +233,72 @@ test("channel and thread render the same Activity disclosure and no permanent Li
   assert.match(activity, /aria-expanded=\{open\}/);
   assert.match(activity, /useState\(autoOpenWhenLive && live\)/, "persisted message activity should mount collapsed even while its run continues");
   assert.match(activity, /commandExecution|toolName/);
+});
+
+test("page-refresh restore rebuilds a visible live card from the server's running[] payload", () => {
+  const restored = restoreRunningAgentRuns([], [{
+    agentId: "agent-1", agentName: "Xiaos", streamId: "stream-1", startedAt: 1000,
+    items: [{ timestamp: 1000, kind: "status", activity: "working", detail: "turn" }],
+  }], "chan-1", 5000);
+  assert.equal(restored.length, 1);
+  const preview = restored[0] as any;
+  assert.equal(preview.id, agentReplyPreviewId("agent-1", "stream-1"));
+  assert.equal(preview.messageType, AGENT_REPLY_PREVIEW_TYPE);
+  assert.equal(preview.agentActivityState, "running");
+  assert.equal(preview.streamVisible, true, "restored runs skip the new-run delay — they predate the load");
+  assert.equal(preview.createdAt, new Date(1000).toISOString());
+  assert.deepEqual(preview.agentActivity.map((i: any) => i.timestamp), [1000]);
+});
+
+test("a restored card keeps appending live and settles through the normal absorb path", () => {
+  const restored = restoreRunningAgentRuns([{ id: "human-1", seq: 1 } as unknown as Msg], [{
+    agentId: "agent-1", agentName: "Xiaos", streamId: "stream-1", startedAt: 1000,
+    items: [{ timestamp: 1000, kind: "status", activity: "working", detail: "turn" }],
+  }], "chan-1", 5000);
+  const withMore = applyAgentReplyPreview(restored, {
+    ...startEvent, op: "activity",
+    entries: [{ timestamp: 6000, kind: "tool_start", toolName: "commandExecution", toolInput: "npm test" }],
+  });
+  assert.equal(withMore[1]?.agentActivity?.length, 2, "socket activity routes onto the restored card by streamId");
+  const settled = applyAgentReplyPreview(withMore, { ...startEvent, op: "done" });
+  assert.equal((settled[1] as any).streamDone, true);
+  const absorbed = absorbPersistedAgentMessagePreview(settled, realMessage("msg-9", "Real reply"));
+  assert.equal(absorbed.consumed, true, "the real message replaces the restored preview like a socket-born one");
+  assert.deepEqual(absorbed.messages.map((m) => m.id), ["human-1", "msg-9"]);
+});
+
+test("restore backfills a persisted mid-run message instead of adding a second bubble", () => {
+  const midRun = realMessage("msg-1", "First public reply");
+  midRun.agentActivity = [{ timestamp: 1000, kind: "status", activity: "working", detail: "turn" }];
+  const restored = restoreRunningAgentRuns([midRun], [{
+    agentId: "agent-1", agentName: "Xiaos", streamId: "stream-1", startedAt: 1000,
+    items: [
+      { timestamp: 1000, kind: "status", activity: "working", detail: "turn" },
+      { timestamp: 1200, kind: "tool_start", toolName: "Read" },
+    ],
+  }], "chan-1", 5000);
+  assert.deepEqual(restored.map((m) => m.id), ["msg-1"], "no extra preview for a stream that already has its message");
+  assert.deepEqual(restored[0]!.agentActivity!.map((i) => i.timestamp), [1000, 1200], "only rows newer than the message's last event backfill");
+});
+
+test("restore is idempotent for runs whose preview already exists", () => {
+  const started = applyAgentReplyPreview([], startEvent, undefined, 4000);
+  const restored = restoreRunningAgentRuns(started, [{
+    agentId: "agent-1", agentName: "Xiaos", streamId: "stream-1", startedAt: 1000,
+    items: startEvent.entries,
+  }], "chan-1", 5000);
+  assert.strictEqual(restored, started, "no new bubble, no duplicate items");
+});
+
+test("page-refresh restore contract: GET messages carries running[], both Chat load paths restore it", () => {
+  const messagesRoute = fs.readFileSync(new URL("../src/server/routes-api/messages.ts", import.meta.url), "utf8");
+  const agentActivity = fs.readFileSync(new URL("../src/server/agentActivity.ts", import.meta.url), "utf8");
+  const chat = fs.readFileSync(new URL("../web/src/views/Chat.tsx", import.meta.url), "utf8");
+  assert.match(messagesRoute, /before == null \? await runningAgentRunsInChannel/, "only the newest page carries live runs — history paging never does");
+  assert.match(agentActivity, /RUNNING_RUN_MAX_AGE_MS/, "orphaned pending rows are age-gated, not resurrected forever");
+  assert.match(agentActivity, /\["active", "starting", "queued"\]\.includes\(agent\.status\)/, "runs of deactivated agents stay hidden until their rows are claimed");
+  const restores = chat.match(/restoreRunningAgentRuns\(d\.messages \|\| \[\], d\.running/g) ?? [];
+  assert.equal(restores.length, 2, "channel view and thread view both rebuild live cards on load");
 });
 
 test("daemon and server preserve the run context while runtime narration stays out of public text", () => {

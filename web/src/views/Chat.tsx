@@ -5,7 +5,7 @@ import i18n from "../i18n";
 import { useStore, type Msg, type Att } from "../store.tsx";
 import { fmtDateTime, isSameLocalDay, fmtDateDivider } from "../format";
 import { PAGE_SIZE, appendWithCap, nextScrollState } from "../lib/msgPaging";
-import { AGENT_REPLY_PREVIEW_TYPE, AGENT_REPLY_STREAM_TICK_MS, absorbPersistedAgentMessagePreview, applyAgentReplyPreview, dropAgentReplyPreviewsForMessage, hasStreamingAgentReplyPreview, mergePersistedAgentMessageUpdate, renderKeyForMessage, tickAgentReplyPreviews, type AgentReplyEvent, type AgentReplyPreviewMsg } from "../lib/agentReplyPreview";
+import { AGENT_REPLY_PREVIEW_TYPE, AGENT_REPLY_STREAM_TICK_MS, absorbPersistedAgentMessagePreview, applyAgentReplyPreview, dropAgentReplyPreviewsForMessage, hasStreamingAgentReplyPreview, mergePersistedAgentMessageUpdate, renderKeyForMessage, restoreRunningAgentRuns, tickAgentReplyPreviews, type AgentReplyEvent, type AgentReplyPreviewMsg } from "../lib/agentReplyPreview";
 import { avatarSeedFor } from "../lib/avatarIdentity";
 import { copyText } from "../lib/clipboard.ts";
 import { MessageContent, type NameItem, type Nav } from "../messageRender.tsx";
@@ -276,7 +276,7 @@ export function Chat() {
     try {
       const d = await api("GET", `/api/messages/channel/${chId}?limit=${PAGE_SIZE}`);
       if (curIdRef.current !== chId) return;
-      const ms: Msg[] = d.messages || [];
+      const ms: Msg[] = restoreRunningAgentRuns(d.messages || [], d.running, chId);
       setMsgs(ms);
       setHasMore(!!d.hasMore);
       markRead(chId);
@@ -754,7 +754,7 @@ function ThreadPanel({ channelId, parent, readOnly = false, onClose, onOpenProfi
   };
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { subscribeChannel(channelId); (async () => { const d = await api("GET", `/api/messages/channel/${channelId}?limit=200`); setMsgs(d.messages || []); })(); }, [channelId]); // join the thread room so replies arrive live (openThread/startThread do not make the socket a room member on their own)
+  useEffect(() => { subscribeChannel(channelId); (async () => { const d = await api("GET", `/api/messages/channel/${channelId}?limit=200`); setMsgs(restoreRunningAgentRuns(d.messages || [], d.running, channelId)); })(); }, [channelId]); // join the thread room so replies arrive live (openThread/startThread do not make the socket a room member on their own); restore any in-progress agent run card missed by the refresh
   useEffect(() => onEvent((e) => {
     if (e.type === "message" && e.channelId === channelId) setMsgs((m) => {
       const preview = absorbPersistedAgentMessagePreview(m, e.message);

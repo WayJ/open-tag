@@ -3,6 +3,7 @@ import type { ServerCtx } from "./ctx.js";
 import { and, asc, desc, eq, gt, ilike, inArray, isNull, lt } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { addReaction, checkSaved, createMessage, listSaved, removeReaction, saveMessage, unsaveMessage } from "../core.js";
+import { runningAgentRunsInChannel } from "../agentActivity.js";
 import { requireCap } from "../capabilities.js";
 import { parseMsgPageParams } from "../messagePage.js";
 import { publish } from "../realtime.js";
@@ -114,7 +115,12 @@ export async function handleMessages(ctx: ServerCtx): Promise<boolean> {
     const rows = await db.select().from(schema.messages).where(and(...conds)).orderBy(desc(schema.messages.seq)).limit(limit + 1); // +1 sentinel row: detect a further page without the exact-page-boundary false positive (mirrors the search/mentions routes)
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    return (sendJson(res, 200, { messages: (await attachMentions(page.reverse())), hasMore }), true);
+    // Page-refresh restore: in-progress runs live outside the message table (their card is a
+    // client-side preview built from socket events), so surface the unclaimed activity rows
+    // alongside the page for the client to rebuild the live card. Only for the newest page —
+    // scrolling back into history never carries a live run.
+    const running = before == null ? await runningAgentRunsInChannel(serverId, cmsg[1]!) : [];
+    return (sendJson(res, 200, { messages: (await attachMentions(page.reverse())), hasMore, running }), true);
   }
   if (p === "/api/messages" && method === "POST") {
     const b = await readJson(req);
