@@ -5,6 +5,8 @@
 // Requires infra up: `npm run infra` (pg :5433, redis :6380) + `npm run db:push`.
 // Run: npx tsx test/activityLogPrune.integration.ts
 // (Use an isolated DB, e.g. DATABASE_URL=postgres://opentag:opentag@localhost:5433/opentag_test — never the live DB.)
+import { assertIntegrationDbIsolated } from "./integrationDbGuard.ts";
+assertIntegrationDbIsolated("test/activityLogPrune.integration.ts");
 import { eq } from "drizzle-orm";
 import { db, schema } from "../src/db/index.ts";
 import { pruneAgentActivityLog, logActivity, ACTIVITY_LOG_CAP } from "../src/server/ws.ts";

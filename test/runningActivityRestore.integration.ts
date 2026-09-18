@@ -6,9 +6,12 @@
 // Requires infra up: `npm run infra` (pg :5433, redis :6380) + `npm run db:push`.
 // Run: npx tsx test/runningActivityRestore.integration.ts
 // (Use an isolated DB, e.g. DATABASE_URL=postgres://opentag:opentag@localhost:5433/opentag_test — never the live DB.)
-import { eq } from "drizzle-orm";
+import { assertIntegrationDbIsolated } from "./integrationDbGuard.ts";
+assertIntegrationDbIsolated("test/runningActivityRestore.integration.ts");
+import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "../src/db/index.ts";
 import { RUNNING_RUN_MAX_AGE_MS, runningAgentRunsInChannel } from "../src/server/agentActivity.ts";
+import { sweepOrphanedAgentRuns } from "../src/server/core.ts";
 
 const ts = Date.now();
 let serverId = "", ownerId = "", machineId = "", channelA = "", channelB = "";
@@ -86,6 +89,34 @@ async function main() {
   runs = await runningAgentRunsInChannel(serverId, channelA);
   check("claimed stream s2 no longer returned (its message owns the card now)", !runs.some((r) => r.streamId === "s2"));
   check("unclaimed s1 still returned", runs.some((r) => r.streamId === "s1"));
+
+  console.log("\n[4] daemon-ready sweep finalizes streams the daemon did NOT report");
+  // Unclaimed at this point: s1 (live, daemon reported it), s3 (sleeping agent), s4 (unbound agent),
+  // plus a fresh ghost s6 for the bound live agent. Sweep with the daemon's live list = [s1].
+  await db.insert(schema.agentActivityLog).values([
+    row(liveAgent, "s6", channelA, ts + 10, "orphaned by daemon crash"),
+  ]);
+  const swept = await sweepOrphanedAgentRuns(serverId, machineId, new Set(["s1"]));
+  check("swept exactly the four unreported streams (s3, s4, s5, s6 — the over-age s5 too: the sweep is authoritative, not age-heuristic)", swept === 4);
+  runs = await runningAgentRunsInChannel(serverId, channelA);
+  check("reported live stream s1 survives the sweep", runs.some((r) => r.streamId === "s1"));
+  check("swept streams no longer surface as running", !runs.some((r) => ["s3", "s4", "s5", "s6"].includes(r.streamId)));
+  const unclaimedLeft = await db.select({ stream: schema.agentActivityLog.streamId }).from(schema.agentActivityLog)
+    .where(and(eq(schema.agentActivityLog.serverId, serverId), isNull(schema.agentActivityLog.messageId)));
+  check("only the reported live stream keeps unclaimed rows", unclaimedLeft.length === 2 && unclaimedLeft.every((r) => r.stream === "s1"));
+  const receipts = await db.select({ id: schema.messages.id, sender: schema.messages.senderId, stream: schema.messages.agentActivityStreamId, state: schema.messages.agentActivityState }).from(schema.messages)
+    .where(eq(schema.messages.serverId, serverId));
+  const errorReceipts = receipts.filter((r) => r.state === "error");
+  // Same-agent same-channel error streams coalesce into one receipt within the window (s5+s6 → one Live receipt)
+  check("every swept agent has an error receipt", [liveAgent, sleepingAgent, noMachineAgent].every((a) => errorReceipts.some((r) => r.sender === a)) && errorReceipts.length === 3);
+  check("coalesced Live receipt carries the latest stream", errorReceipts.some((r) => r.sender === liveAgent && r.stream === "s6"));
+
+  console.log("\n[5] an unbound agent's stream is spared while another machine is online");
+  const [m2] = await db.insert(schema.machines).values({ serverId, userId: ownerId, name: `m2_${ts}`, apiKeyHash: `hash2_${ts}`, apiKeyPrefix: `hash2_${ts}`.slice(0, 14), status: "online" }).returning();
+  await db.insert(schema.agentActivityLog).values([row(noMachineAgent, "s8", channelA, ts + 20, "unbound run on the sole... not sole")]);
+  const swept2 = await sweepOrphanedAgentRuns(serverId, m2!.id, new Set(["s1"]));
+  check("unbound stream s8 not swept (its daemon may be the OTHER online machine)", swept2 === 0);
+  check("s8 still pending", (await db.select({ id: schema.agentActivityLog.id }).from(schema.agentActivityLog).where(and(eq(schema.agentActivityLog.streamId, "s8"), isNull(schema.agentActivityLog.messageId)))).length === 1);
 }
 
 main()

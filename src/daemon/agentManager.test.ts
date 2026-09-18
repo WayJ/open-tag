@@ -460,6 +460,38 @@ test("durable preparations preserve arrival order even when storage lookup could
   }
 });
 
+test("activeStreamIds reports live reply streams for the ready uplink and drops finished ones", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-agent-manager-streams-"));
+  let callbacks: RuntimeCallbacks | undefined;
+  const fakeRuntime: Runtime = {
+    name: "fake",
+    start(_opts: StartOpts, cb: RuntimeCallbacks) {
+      callbacks = cb;
+      cb.onSession("fake-session");
+      cb.onInitialTurnAdmission();
+      cb.onActivity("online");
+      return { deliver: async () => {}, stop: () => {} };
+    },
+  };
+  try {
+    const mgr = new AgentManager(() => {}, {
+      dataDir: root, binDir: root, deliverDebounceMs: 0, budget: noPressureBudget, runtimeResolver: () => fakeRuntime,
+    });
+    await mgr.start("agent-streams", baseConfig("agent-streams"));
+    assert.deepEqual(mgr.activeStreamIds(), [], "an idle agent reports no live streams");
+    const turn = mgr.deliver("agent-streams", "Alice", "channel-1", false, { turnId: "turn-a", streamId: "stream-a" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(mgr.activeStreamIds(), ["stream-a"], "the in-flight stream is reported so the server sweep spares it");
+    callbacks!.onTrajectory([{ kind: "text", text: "done work" }]);
+    callbacks!.onActivity("online");
+    await turn;
+    assert.deepEqual(mgr.activeStreamIds(), [], "a finished stream drops out of the report");
+    mgr.stopAll();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a second turn queues its Activity preview until the first runtime turn finishes", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "open-tag-agent-manager-"));
   const sent: any[] = [];
