@@ -366,7 +366,14 @@ export class AgentManager {
   private resetIdle(key: string): void {
     const r = this.agents.get(key); if (!r) return;
     if (r.idleTimer) clearTimeout(r.idleTimer);
-    r.idleTimer = setTimeout(() => { this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs }); void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) })); }, this.idleMs);
+    r.idleTimer = setTimeout(() => {
+      // INVARIANT: idle means BETWEEN turns. A quiet stretch mid-turn (a long tool call, a slow
+      // codex turn) is not idle's business — kill it and we murder working agents. While
+      // turnActive, re-arm and keep waiting; activity/trajectory events keep resetting this timer.
+      if (this.agents.get(key)?.turnActive) { this.resetIdle(key); return; }
+      this.log.info("idle sleep", { agentId: agentIdOf(key), key, idleMs: this.idleMs });
+      void this.sleepScope(key).catch((error) => this.log.warn("idle sleep failed", { agentId: agentIdOf(key), detail: String(error) }));
+    }, this.idleMs);
   }
 
   /** Debounced managed-memory uplink: every turn end (any scope) re-arms one agent-granular timer, so
@@ -679,7 +686,9 @@ export class AgentManager {
           this.finishReplyPreview(key);
         }
       },
-      onTrajectory: (entries) => { this.sendAgentTrajectory(key, entries); },
+      // Trajectory is activity too: codex emits ONLY trajectory during turns, so without this
+      // reset the idle timer would fire mid-turn on exactly the runtimes that stream progress.
+      onTrajectory: (entries) => { this.resetIdle(key); this.sendAgentTrajectory(key, entries); },
       onExit: (code) => {
         this.log.info("agent exited", { agentId, key, code });
         const exitError = new Error(`runtime exited before delivery admission (${code ?? "signal"})`);
