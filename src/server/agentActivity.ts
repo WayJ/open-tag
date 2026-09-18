@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, notInArray } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
 
 export interface AgentActivityItem {
@@ -166,4 +166,48 @@ export async function runningAgentRunsInChannel(serverId: string, channelId: str
     ...run,
     agentName: ags.find((a) => a.id === run.agentId)?.displayName ?? "Agent",
   }));
+}
+
+export interface OrphanedPendingRun {
+  agentId: string;
+  agentName: string;
+  channelId: string;
+  streamId: string;
+}
+
+/** Unclaimed (messageId IS NULL) runs attributable to THIS machine's daemon: agents bound to the
+ *  machine, plus machine-less (unbound topology) agents when this is the only online machine — an
+ *  unbound agent's daemon may be any machine, so another online machine means we cannot attribute
+ *  its rows and must leave them alone. Caller (daemon-ready sweep) compares against the daemon's
+ *  authoritative live-stream list and finalizes the difference; this function only SELECTs. */
+export async function orphanedPendingRuns(serverId: string, machineId: string): Promise<OrphanedPendingRun[]> {
+  const rows = await db.selectDistinctOn([schema.agentActivityLog.agentId, schema.agentActivityLog.streamId], {
+    agentId: schema.agentActivityLog.agentId, channelId: schema.agentActivityLog.channelId, streamId: schema.agentActivityLog.streamId,
+  }).from(schema.agentActivityLog).where(and(
+    eq(schema.agentActivityLog.serverId, serverId),
+    isNotNull(schema.agentActivityLog.streamId),
+    isNotNull(schema.agentActivityLog.channelId),
+    isNull(schema.agentActivityLog.messageId),
+  ));
+  if (!rows.length) return [];
+  const ags = await db.select({
+    id: schema.agents.id, displayName: schema.agents.displayName, machineId: schema.agents.machineId,
+  }).from(schema.agents).where(and(
+    eq(schema.agents.serverId, serverId),
+    inArray(schema.agents.id, rows.map((row) => row.agentId)),
+    isNull(schema.agents.deletedAt),
+  ));
+  const otherMachineOnline = (await db.select({ id: schema.machines.id }).from(schema.machines).where(and(
+    eq(schema.machines.serverId, serverId),
+    eq(schema.machines.status, "online"),
+    ne(schema.machines.id, machineId),
+  )).limit(1)).length > 0;
+  const out: OrphanedPendingRun[] = [];
+  for (const row of rows) {
+    const agent = ags.find((a) => a.id === row.agentId);
+    if (!agent) continue; // dropped agent — rows stay dormant until claimed or pruned
+    if (agent.machineId !== machineId && !(agent.machineId === null && !otherMachineOnline)) continue;
+    out.push({ agentId: row.agentId, agentName: agent.displayName, channelId: row.channelId!, streamId: row.streamId! });
+  }
+  return out;
 }

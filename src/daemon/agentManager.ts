@@ -173,6 +173,13 @@ export class AgentManager {
   /** Agent ids currently running (one agent may run several scope-keyed runtimes). */
   running(): string[] { return [...new Set([...this.agents.keys()].map(agentIdOf))]; }
 
+  /** Live reply-stream ids across all scopes — the authoritative "these runs are still going" list
+   *  for the ready uplink. The server compares it against unclaimed activity rows and finalizes the
+   *  difference as error receipts, so rows orphaned by a daemon crash (no done/error uplink) can't
+   *  resurrect as phantom live cards. A same-process reconnect reports its live streams and spares
+   *  them; a fresh daemon process reports none and the dead streams get swept. */
+  activeStreamIds(): string[] { return [...this.activeReplyPreviews.values()].map((p) => p.streamId); }
+
   /** True while any scope of this agent is running or starting. Agent-level status reports
    *  (queued/inactive/sleeping/error) must be withheld in that case, so the UI never flips an
    *  agent with a live scope to a dormant state. */

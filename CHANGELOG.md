@@ -11,6 +11,12 @@ from `main`; see commit history for fine-grained server/web changes.
 
 ### Added
 
+- Daemon `ready` now reports `runningStreams` (live reply-stream ids). The server compares it
+  against unclaimed agent-activity rows on every daemon ready and finalizes the difference as
+  error receipts, so runs orphaned by a daemon crash (no done/error uplink) no longer surface as
+  phantom "agent working" cards after a page refresh. Same-process reconnects list their live
+  streams and are never swept; only a fresh daemon process (which cannot have inherited them)
+  triggers the sweep. Backward compatible: older daemons send no field and are skipped.
 - Scoped sessions: one persistent runtime session per (agent, channel|thread) — same-scope turns stay
   serialized while different threads/channels run concurrently (head-of-line blocking removed). Server
   resolves the scope and passes it in `agent:start`/`agent:deliver`; session ids persist in the new

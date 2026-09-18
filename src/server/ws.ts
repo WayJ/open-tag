@@ -11,7 +11,7 @@ import { MACHINE_REJECTED_CODE, memoryFilesDigest, validateMemoryFiles } from ".
 import { catchUpAgentsOnMachine } from "./reconnectCatchup.js";
 import { markMachineAgentsOffline } from "./machineLiveness.js";
 import { ACTIVITY_LOG_CAP, logActivity, pruneAgentActivityLog, startAgentActivityRun } from "./agentActivity.js";
-import { finalizeAgentActivityRun } from "./core.js";
+import { finalizeAgentActivityRun, sweepOrphanedAgentRuns } from "./core.js";
 import { acceptAgentDeliveryAck, hasPendingAgentDelivery, noteAgentDeliveryPending, rejectAgentDeliveryAck } from "./agentDeliveryAck.js";
 import { acknowledgeAgentDeliveryAdmission, commitAgentDeliveryAdmission, ownsAgentDeliveryAdmission, releaseAgentDeliveryAdmission, type CommittedAgentDelivery } from "./agentDeliveryAdmission.js";
 import { createWsFrameGate } from "./wsFrameGate.js";
@@ -73,6 +73,14 @@ async function onDaemon(ws: WebSocket, key: string): Promise<void> {
           }
           await handleConversationTurnDaemonTopologyChange(serverId!);
           await catchUpAgentsOnMachine(serverId!, machineId, runningIds);
+          // Daemon-ready sweep (runningStreams ≥ daemon protocol with the field): unclaimed runs of
+          // this machine's daemon that its live-stream list does not carry are dead (crashed/killed
+          // without done/error) — finalize them as error receipts before they surface as phantom
+          // live cards. Only wired when the daemon reported the field; older daemons are skipped.
+          if (Array.isArray(msg.runningStreams)) {
+            const swept = await sweepOrphanedAgentRuns(serverId!, machineId, new Set(msg.runningStreams.map((id: unknown) => String(id))));
+            if (swept) log.info("orphaned agent runs swept on daemon ready", { machineId, swept });
+          }
         })().catch((e: any) => log.error("catch-up failed", { machineId, detail: String(e?.message ?? e) }));
       }
       else if (msg.type === "agent:status" || msg.type === "agent:activity") await onAgentUpdate(serverId!, msg);

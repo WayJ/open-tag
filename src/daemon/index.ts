@@ -187,7 +187,7 @@ conn = new Connection(serverUrl, apiKey, (msg) => {
   mgr.clearMemoryUploadCache();
   conn.send({
     type: "ready", capabilities: ["agent:start", "agent:stop", "agent:sleep", "agent:reset", "agent:profile", "agent:deliver", "agent:workspace", "resource:limits", DELIVERY_ADMISSION_CAPABILITY, AGENT_CONTROL_ACK_CAPABILITY, PROJECT_DIRECTORY_CAPABILITY, PROJECT_BROWSER_CAPABILITY],
-    runtimes, runningAgents: mgr.running(), hostname: os.hostname(), os: `${os.platform()} ${os.arch()}`, daemonVersion: process.env.DAEMON_VERSION ?? "dev",
+    runtimes, runningAgents: mgr.running(), runningStreams: mgr.activeStreamIds(), hostname: os.hostname(), os: `${os.platform()} ${os.arch()}`, daemonVersion: process.env.DAEMON_VERSION ?? "dev",
     machineId: readMachineId(), // Stable identity: empty on first connection; server sends it back via ready:ack for persistence.
   });
 });

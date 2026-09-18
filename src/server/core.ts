@@ -10,7 +10,7 @@ import { canAutoJoinMentionedMembers, type MessageSenderType } from "./agentWake
 import { UUID_RE } from "./util.js";
 import { ensureReplyRecipients, releaseUnavailableReplyGrant } from "./replyCoordination.js";
 import type { ReplySlot } from "./replyCoordinationPolicy.js";
-import { assignActivityRows, claimPendingAgentActivity, pendingActivityForStream, type AgentActivityItem } from "./agentActivity.js";
+import { assignActivityRows, claimPendingAgentActivity, orphanedPendingRuns, pendingActivityForStream, type AgentActivityItem } from "./agentActivity.js";
 import { agentConfig, type ScopeContext } from "./agentConfig.js";
 import { attachMessageToConversationTurn, scheduleConversationTurn, type ConversationBoundaryKind } from "./conversationTurns.js";
 import { dispatchConversationTurn as dispatchConversationTurnWithDeps, dispatchLegacyMessage, prepareConversationTurnResponsibility, type ConversationTurnDispatchDeps } from "./conversationTurnDispatch.js";
@@ -561,6 +561,24 @@ export async function dispatchConversationTurn(turnId: string): Promise<void> {
 
 export async function finalizeAgentActivityRun(serverId: string, agentId: string, channelId: string, streamId: string, agentName: string, state: "handled" | "error"): Promise<void> {
   return serializeActivityReceipt(`${serverId}:${agentId}:${channelId}`, () => finalizeAgentActivityRunNow(serverId, agentId, channelId, streamId, agentName, state));
+}
+
+/** Daemon-ready sweep: a freshly connected daemon reports the reply streams still live in ITS
+ *  process (ready.runningStreams). Every unclaimed run attributable to that machine's daemon but
+ *  NOT in that list belongs to a dead process (crash/kill never sent done/error) — finalize it as
+ *  an error receipt so the rows stop surfacing as a phantom "agent working" card on page refresh.
+ *  A same-process reconnect lists its live streams, so reconnect-resume runs are never swept;
+ *  only a NEW daemon process (which cannot have inherited them) triggers the sweep. Returns the
+ *  number of streams finalized. */
+export async function sweepOrphanedAgentRuns(serverId: string, machineId: string, liveStreamIds: ReadonlySet<string>): Promise<number> {
+  const orphans = await orphanedPendingRuns(serverId, machineId);
+  let swept = 0;
+  for (const run of orphans) {
+    if (liveStreamIds.has(run.streamId)) continue;
+    await finalizeAgentActivityRun(serverId, run.agentId, run.channelId, run.streamId, run.agentName, "error");
+    swept += 1;
+  }
+  return swept;
 }
 
 async function finalizeAgentActivityRunNow(serverId: string, agentId: string, channelId: string, streamId: string, agentName: string, state: "handled" | "error"): Promise<void> {
