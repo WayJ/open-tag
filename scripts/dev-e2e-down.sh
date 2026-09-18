@@ -2,10 +2,10 @@
 # Stop this worktree's dev E2E stack (server + daemon started by dev:e2e:up).
 # Usage: npm run dev:e2e:down
 set -euo pipefail
-PORT=$(grep -E "^PORT=" .env | head -1 | cut -d= -f2-)
 [ -f .env ] || { echo "✗ no .env in $(pwd)"; exit 1; }
 HOME_DIR=$(grep -E "^OPEN_TAG_HOME=" .env | head -1 | cut -d= -f2- | sed "s|^\$HOME|$HOME|; s|^~|$HOME|")
 RUN="${HOME_DIR:-$HOME/.open-tag}"
+PORT=$(grep -E "^PORT=" .env | head -1 | cut -d= -f2-)
 kill_tree() { # winpid → taskkill tree, true if killed
   taskkill //F //T //PID "$1" >/dev/null 2>&1
 }
