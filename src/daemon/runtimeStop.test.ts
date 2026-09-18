@@ -29,14 +29,21 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
 }
 
 function fakeCommand(binDir: string, command: string, body: string): void {
+  // A clean one-shot turn must still speak its own protocol: pi treats a silent exit 0 as a broken
+  // invocation (piNoJsonError), so ITS idle fake emits one session event first. Hermes reads stdout
+  // as the model's final response text, so it must stay silent; the JSON-tolerant adapters are
+  // unaffected either way — hence the per-command gate instead of a blanket line.
+  const speak = command === "pi";
   if (process.platform === "win32") {
     const batchBody = body === "exit 0"
-      ? "exit /b 0"
+      ? `${speak ? "echo {\"type\":\"session\",\"id\":\"fake\"}\r\n" : ""}exit /b 0`
       : "ping -n 31 127.0.0.1 >nul";
     writeFileSync(path.join(binDir, `${command}.cmd`), `@echo off\r\n${batchBody}\r\n`, "utf8");
   } else {
     const file = path.join(binDir, command);
-    writeFileSync(file, `#!/bin/sh\n${body}\n`, "utf8");
+    writeFileSync(file, body === "exit 0"
+      ? `#!/bin/sh\n${speak ? "echo '{\"type\":\"session\",\"id\":\"fake\"}'\n" : ""}exit 0\n`
+      : `#!/bin/sh\n${body}\n`, "utf8");
     chmodSync(file, 0o755);
   }
 }
@@ -89,7 +96,7 @@ async function assertAcceptedFailureKeepsSessionReusable(
     session = adapter.runtime.start({
       cwd: root,
       stateDir,
-      env: { PATH: binDir, HOME: root, OPEN_TAG_TEST_STATE: countFile },
+      env: { PATH: binDir, HOME: root, OPEN_TAG_TEST_STATE: countFile, OPEN_TAG_TEST_SPEAK: adapter.runtime === piRuntime ? "1" : "" },
       systemPrompt: "system",
       initialPrompt: "start",
     }, callbacks(admissions, activities, exits, acceptedFailures));
@@ -168,6 +175,7 @@ const fs = require("node:fs");
 const file = process.env.OPEN_TAG_TEST_STATE;
 const count = (fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0) + 1;
 fs.writeFileSync(file, String(count));
+if (process.env.OPEN_TAG_TEST_SPEAK === "1") console.log(JSON.stringify({ type: "session", id: "fake" })); // pi needs ≥1 event on clean turns; hermes must stay silent (stdout = its reply text)
 if (count === 2) { console.error("accepted turn failed"); process.exit(1); }
 `;
   for (const runtime of [copilotRuntime, cursorRuntime, hermesRuntime, kimiRuntime, opencodeRuntime, piRuntime, reasonixRuntime]) {
@@ -254,6 +262,7 @@ const fs = require("node:fs");
 const file = process.env.OPEN_TAG_TEST_STATE;
 const count = (fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0) + 1;
 fs.writeFileSync(file, String(count));
+console.log(JSON.stringify({ type: "session", id: "fake" })); // clean turns must emit ≥1 protocol event (piNoJsonError)
 if (count === 2) console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "provider rejected" } }));
 `;
   return assertAcceptedFailureKeepsSessionReusable(adapters.find((adapter) => adapter.runtime === piRuntime)!, source);

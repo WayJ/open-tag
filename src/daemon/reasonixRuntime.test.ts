@@ -53,16 +53,18 @@ test("a resumed session id maps to the persisted session file reasonix --resume 
   // v1.19.1 keys storage on its LOGICAL cwd (honors PWD): a run in /tmp/x — where getcwd() reports
   // /private/tmp/x on macOS — writes projects/-tmp-x, so the encoding must use cwd as given. Verified
   // live against v1.19.1; v1.18.0 used getcwd() instead and is covered by the by-id fallback.
+  // Expected paths are built with path.join so the assertion targets the cwd ENCODING, not the
+  // platform's separator spelling (the impl itself uses path.join).
   const id = "20260801-121455.600066000-hy3-ioa + planner kimi-k3-ioa";
   assert.equal(
     reasonixSessionFile(id, "/tmp/rxpwd", "/home/u/.reasonix"),
-    `/home/u/.reasonix/projects/-tmp-rxpwd/sessions/${id}.jsonl`,
+    path.join("/home/u/.reasonix", "projects", "-tmp-rxpwd", "sessions", `${id}.jsonl`),
     "a symlinked cwd must NOT be realpath-resolved",
   );
   // dots in the path are encoded to dashes too (agent state dirs like ~/.open-tag/agents/a1)
   assert.equal(
     reasonixSessionFile(id, "/home/u/.open-tag/agents/a1", "/home/u/.reasonix"),
-    `/home/u/.reasonix/projects/-home-u--open-tag-agents-a1/sessions/${id}.jsonl`,
+    path.join("/home/u/.reasonix", "projects", "-home-u--open-tag-agents-a1", "sessions", `${id}.jsonl`),
   );
 });
 
