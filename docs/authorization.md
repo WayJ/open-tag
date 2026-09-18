@@ -189,6 +189,7 @@ block settlement merely because another eligible candidate was promoted.
 | `GET /api/agents/:id/activity-log` | any tenant by agent id | `serverId`-scoped |
 | `GET /api/agents/:id/agent-dms` | any tenant's DMs | agent-ownership pre-check (404 on foreign agent) + `serverId`-scoped channel lookup |
 | `GET /api/channels/:id/members` | any tenant by UUID | channel-ownership pre-check (404 otherwise) + `canUserReadChannel` membership check (IDOR-B2) |
+| `GET /api/channels/:id/mention-candidates` | any tenant by UUID | same as members: ownership pre-check (404) + `canUserReadChannel` (404, never 403); response excludes the requester and only ever names members of / candidates reachable from that channel |
 | `GET /api/channels/:id/files` | any tenant by UUID | `serverId`-scoped + `canUserReadChannel` membership check (IDOR-B2) |
 | `POST`/`DELETE /api/messages/:id/reactions` | message access, no channel-membership check | `canUserReadChannel` on message's channel after lookup (IDOR-B2) |
 | `resolveTarget` `dm:@user` (agent plane) | any global username | peer must be a `serverMembers` member |

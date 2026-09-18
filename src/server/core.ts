@@ -97,6 +97,23 @@ export async function channelMembers(channelId: string): Promise<Member[]> {
   return out;
 }
 
+export interface MentionCandidateRow { id: string; name: string; displayName: string; type: "user" | "agent"; member: boolean }
+
+/** Channel-scoped @-mention candidates for the human composer: the channel's members plus everyone
+ *  its @-reach may pull in (mentionAutoJoinPool — a thread inherits its parent), minus the
+ *  requester. Single source of truth for GET /api/channels/:id/mention-candidates; the picker
+ *  never falls back to a client-side workspace-wide guess. */
+export async function mentionCandidates(serverId: string, ch: typeof schema.channels.$inferSelect, requesterId: string): Promise<MentionCandidateRow[]> {
+  const members = await channelMembers(ch.id);
+  const pool = await mentionAutoJoinPool(serverId, ch);
+  const memberKeys = new Set(members.map((m) => `${m.type}:${m.id}`));
+  const key = (s: string) => s.normalize("NFC").toLowerCase();
+  return pool
+    .filter((m) => !(m.type === "user" && m.id === requesterId))
+    .map((m) => ({ id: m.id, name: m.name, displayName: m.displayName, type: m.type, member: memberKeys.has(`${m.type}:${m.id}`) }))
+    .sort((a, b) => Number(a.member !== true) - Number(b.member !== true) || key(a.name).localeCompare(key(b.name)));
+}
+
 /** Highest message seq currently in a channel (0 if empty). seq is globally monotonic (Redis INCR), so this is
  *  the channel's read "watermark" at this instant — any message that arrives later has a strictly higher seq. */
 export async function channelMaxSeq(channelId: string): Promise<number> {

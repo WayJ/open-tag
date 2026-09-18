@@ -1,5 +1,5 @@
 // Global state + API + socket.io event bus (React Context). Chat messages and traces are consumed by views via onEvent.
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { io, type Socket } from "socket.io-client";
 import { messageUnreadDelta, threadUnreadDelta } from "./threadUnread";
 import { initialAuthState, TOKEN_KEY, type AuthState } from "./routing.ts";
@@ -32,6 +32,8 @@ interface Store {
   agents: Agent[];        // ALL agents incl. system-seeded showcase demo agents — resolve a sender's avatar/name/profile by id (incl. #showcase history)
   visibleAgents: Agent[]; // agents minus system-seeded showcase demo agents — use for member rosters and every agent picker / @mention candidate list
   machines: Machine[]; humans: Human[];
+  mentionCandidatesByChannel: Record<string, import("./lib/mentionCandidates").MentionCandidate[] | undefined>; // per-channel @-picker pool (server-authored; undefined = not yet fetched, [] = fetched-or-failed)
+  loadMentionCandidates: (channelId: string) => Promise<void>;    // lazy fetch-on-first-@ (idempotent, fail-closed to [])
   latestDaemonVersion: string;                                    // newest published daemon version (packages/daemon); online machines below it are flagged outdated in the system-alert center
   api: (m: string, p: string, b?: unknown) => Promise<any>;
   reload: () => Promise<void>;
@@ -115,6 +117,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const r = await fetch(path, { method, headers: { "content-type": "application/json", authorization: "Bearer " + tokenRef.current, "x-server-id": sidRef.current }, body: body ? JSON.stringify(body) : undefined });
     return r.json();
   };
+  const [mentionCandidatesByChannel, setMentionCandidatesByChannel] = useState<Record<string, import("./lib/mentionCandidates").MentionCandidate[] | undefined>>({});
+  const mentionCandidatesByChannelRef = useRef<Record<string, import("./lib/mentionCandidates").MentionCandidate[] | undefined>>({});
+  const mentionCandidatesInflight = useRef<Set<string>>(new Set());
+  const putMentionCandidates = (next: Record<string, import("./lib/mentionCandidates").MentionCandidate[] | undefined>) => {
+    mentionCandidatesByChannelRef.current = next;
+    setMentionCandidatesByChannel(next);
+  };
+  const loadMentionCandidates = useCallback(async (channelId: string) => {
+    if (!channelId || mentionCandidatesByChannelRef.current[channelId] !== undefined || mentionCandidatesInflight.current.has(channelId)) return;
+    mentionCandidatesInflight.current.add(channelId);
+    let fetched: import("./lib/mentionCandidates").MentionCandidate[] = [];
+    try { const d = await api("GET", `/api/channels/${channelId}/mention-candidates`); fetched = d?.candidates ?? []; } catch { /* fail-closed: keep [] */ }
+    finally { mentionCandidatesInflight.current.delete(channelId); }
+    putMentionCandidates({ ...mentionCandidatesByChannelRef.current, [channelId]: fetched });
+    // fail-closed: a failed fetch stores [] — the picker shows nothing rather than a workspace-wide guess
+  }, [api]);
   const reload = async () => {
     // Pin the target server at entry. A client-side workspace switch re-points sidRef mid-flight; `fresh()` then
     // turns false, so this (now-stale) reload's results are dropped instead of landing mixed with the new
@@ -289,7 +307,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setReady(false);
     sidRef.current = cur.id; setServerId(cur.id); setSlug(cur.slug || "open-tag"); setMyRole(cur.role || "member"); setCapabilities(cur.capabilities || {});
     setServerAvatar(cur.avatarUrl ? `${cur.avatarUrl}?token=${encodeURIComponent(tokenRef.current)}` : null);
-    setChannels([]); setDms([]); setUnread({}); setAgents([]); setMachines([]); setHumans([]); setSavedIds(new Set()); setAgentPanelReq(null);
+    setChannels([]); setDms([]); setUnread({}); setAgents([]); setMachines([]); setHumans([]); setSavedIds(new Set()); setAgentPanelReq(null); putMentionCandidates({});
     const unreadRefresh = createUnreadRefresh(
       () => api("GET", "/api/channels/unread"),
       (values) => setUnread(values),
@@ -366,7 +384,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Real-time: new DM / channel membership change → reload lists + join the new channel room
       // (the server validates membership; non-member join requests are rejected).
       sock.on("dm:new", (p: any) => { reload(); if (p?.channelId) sockRef.current?.emit("join:channel", p.channelId); });
-      sock.on("channel:members-updated", (p: any) => { reload(); if (p?.channelId) sockRef.current?.emit("join:channel", p.channelId); });
+      sock.on("channel:members-updated", (p: any) => { reload(); putMentionCandidates({}); if (p?.channelId) sockRef.current?.emit("join:channel", p.channelId); }); // wipe the WHOLE candidate cache: thread pools derive from parent members, and the event carries only the changed channel's id
       // Machine online/offline → reload machine list (DB is source of truth for status/daemon version/runtimes/new rows).
       // Note: machine:status payload omits id (only forwards {online,hostname,runtimes}), so targeted row update is not possible → full reload is safest.
       sock.on("machine:status", async (p: any) => {
@@ -396,5 +414,5 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Showcase demo agents (creatorType="system") stay in `agents` so #showcase history still resolves their
   // avatar/name/profile by id — but they are not real members, so every roster / picker uses `visibleAgents`.
   const visibleAgents = agents.filter((a) => a.creatorType !== "system");
-  return <Ctx.Provider value={{ ready, authState, serverId, slug, me, myRole, serverAvatar, servers, capabilities, createServer, switchServer, logout, uploadServerAvatar, uploadAgentAvatar, uploadUserAvatar, channels, dms, unread, agents, visibleAgents, machines, latestDaemonVersion, humans, api, reload, onEvent, subscribeChannel, createChannel, markActionExecuted, createTasks, openDM, joinChannel, leaveChannel, markRead, uploadFiles, uploadOne, attachmentUrl, react, openThread, openAgentPanel, agentPanelReq, clearAgentPanelReq, savedIds, saveMsg, unsaveMsg, listSaved }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ ready, authState, serverId, slug, me, myRole, serverAvatar, servers, capabilities, createServer, switchServer, logout, uploadServerAvatar, uploadAgentAvatar, uploadUserAvatar, channels, dms, unread, agents, visibleAgents, machines, latestDaemonVersion, humans, mentionCandidatesByChannel, loadMentionCandidates, api, reload, onEvent, subscribeChannel, createChannel, markActionExecuted, createTasks, openDM, joinChannel, leaveChannel, markRead, uploadFiles, uploadOne, attachmentUrl, react, openThread, openAgentPanel, agentPanelReq, clearAgentPanelReq, savedIds, saveMsg, unsaveMsg, listSaved }}>{children}</Ctx.Provider>;
 }
