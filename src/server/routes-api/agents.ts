@@ -5,7 +5,7 @@ import { db, schema } from "../../db/index.js";
 import { requireCap } from "../capabilities.js";
 import { parseAgentInputPolicyPatch } from "../agentInputPolicy.js";
 import { canonicalDmParticipantIds, classifyAgentDm } from "../channelAccess.js";
-import { DESC_TOO_LONG, INVALID_AGENT_NAME, addChannelMembers, descTooLong, invalidAgentName, normalizeAgentHandle, dequeueAgent, resetAgent, startAgent, stopAgent, syncAgentProfile } from "../core.js";
+import { DESC_TOO_LONG, INVALID_AGENT_NAME, addChannelMembers, descTooLong, invalidAgentName, normalizeAgentHandle, dequeueAgent, migrateAgent, resetAgent, startAgent, stopAgent, syncAgentProfile } from "../core.js";
 import { PROJECT_DIRECTORY_CAPABILITY, projectDirectoryBlockReason, requestDaemon, requestDaemonByMachine } from "../daemonHub.js";
 import { publish } from "../realtime.js";
 import { ALL_SCOPE_KEYS, SCOPES, effectiveScopes, isScopeLiteral } from "../scopes.js";
@@ -188,6 +188,20 @@ export async function handleAgents(ctx: ServerCtx): Promise<boolean> {
       if (!started.ok) return (sendErr(res, 503, started.reason ?? "cannot start"), true);
     }
     return (sendJson(res, 200, { ok: true }), true);
+  }
+  // Cross-machine migrate: stop on the old machine (three-branch: running→stop-settle, idle→skip,
+  // old machine offline→rebind anyway) → rebind machineId + clear session pointers → delivery routing
+  // switches to the new machine (memory auto-restores there on first start). No daemon protocol change.
+  const amig = /^\/api\/agents\/([^/]+)\/migrate$/.exec(p);
+  if (amig && !isUuid(amig[1]!)) return (sendErr(res, 404, "agent not found"), true);
+  if (amig && method === "POST") {
+    if (!await requireCap(serverId, userId, "manageAgents")) return (sendErr(res, 403, "need manageAgents capability"), true);
+    const b = await readJson(req);
+    // non-uuid would throw casting into the uuid column → 500; a bogus uuid is fine (→ 409 machine-offline, no existence leak)
+    if (!b || typeof b.machineId !== "string" || !isUuid(b.machineId)) return (sendErr(res, 400, "machineId required"), true);
+    const r = await migrateAgent(serverId, amig[1]!, b.machineId, userId);
+    if (!r.ok) return (sendErr(res, r.status, r.error), true);
+    return (sendJson(res, 200, { ok: true, agentId: amig[1]!, machineId: r.machineId, alreadyThere: r.alreadyThere }), true);
   }
   // Dequeue: cancel a queued start (separate from lifecycle — not a running-agent action)
   const adq = /^\/api\/agents\/([^/]+)\/dequeue$/.exec(p);

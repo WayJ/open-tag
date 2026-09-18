@@ -1251,6 +1251,52 @@ export async function resetAgent(serverId: string, agentId: string, wipeWorkspac
   await publishAgentState(serverId, agentId);
   return { ok: true };
 }
+export type MigrateAgentResult =
+  | { ok: true; alreadyThere: boolean; machineId: string }
+  | { ok: false; status: number; error: string };
+
+/** Manual cross-machine migrate: stop the agent on its OLD machine (three-branch), then rebind it to the
+ *  target machine and clear session pointers — the next dispatch routes by the new machineId, whose daemon
+ *  restores memory server-side on first start. Validation order is load-bearing (spec 2026-09-18):
+ *  404 (agent) → same-machine idempotent (BEFORE the online check: a temporarily-offline machine you are
+ *  already bound to must succeed, not 409) → 409 machine-offline for any target that is not a same-tenant
+ *  ONLINE machine (cross-tenant walks the same 409 — no existence leak). Stop branches: old machine online
+ *  + agent running (starting/active/queued) → agent:stop via requestAgentControl and wait for the settle
+ *  ACK (30s timeout; failure → 503 stop-failed, NO rebind); old machine online + agent idle (inactive/
+ *  sleeping) → skip stop; old machine entirely offline → skip stop and rebind anyway (dead-machine
+ *  flagship). Known v1 residual: a network-partitioned (not dead) old machine leaves an orphan process
+ *  holding a valid agent token — ready-reconcile queries by machineId and does not evict it after rebind;
+ *  documented acceptance (same exposure class as DELETE agent's pre-C4 handling). */
+export async function migrateAgent(serverId: string, agentId: string, targetMachineId: string, actor?: string): Promise<MigrateAgentResult> {
+  const a = (await db.select().from(schema.agents).where(and(
+    eq(schema.agents.id, agentId), eq(schema.agents.serverId, serverId), isNull(schema.agents.deletedAt),
+  )))[0];
+  if (!a) return { ok: false, status: 404, error: "agent not found" };
+  if (a.machineId && a.machineId === targetMachineId) return { ok: true, alreadyThere: true, machineId: targetMachineId };
+  const target = (await db.select().from(schema.machines).where(and(
+    eq(schema.machines.id, targetMachineId), eq(schema.machines.serverId, serverId),
+  )))[0];
+  if (!target || target.status !== "online" || !isMachineConnected(targetMachineId)) return { ok: false, status: 409, error: "machine-offline" };
+  const running = ["starting", "active", "queued"].includes(a.status);
+  const oldTarget = await agentControlTarget(serverId, agentId);
+  let stopped = false;
+  if (oldTarget.ok && running) {
+    const result = await requestAgentControl(serverId, oldTarget, { type: "agent:stop", agentId });
+    if (!result.ok) return { ok: false, status: 503, error: `stop-failed: ${result.reason ?? "stop not confirmed"}` };
+    stopped = true;
+  }
+  // Rebind: clear every scoped session chain (stale scope sessionId would break the new machine's first
+  // --resume; resetAgent precedent) + the legacy top-level pointer, and drop to inactive/offline — the
+  // real post-migration enums (the old machine no longer reports state for this agent).
+  await db.transaction(async (tx) => {
+    await tx.delete(schema.agentSessions).where(eq(schema.agentSessions.agentId, agentId));
+    await tx.update(schema.agents).set({ machineId: targetMachineId, status: "inactive", activity: "offline", sessionId: null })
+      .where(and(eq(schema.agents.id, agentId), eq(schema.agents.serverId, serverId)));
+  });
+  await publishAgentState(serverId, agentId, "migrated");
+  log.info("agent migrated", { serverId, agentId, actor, fromMachineId: a.machineId, toMachineId: targetMachineId, stopped });
+  return { ok: true, alreadyThere: false, machineId: targetMachineId };
+}
 /** Profile (displayName/description) changed → ask the daemon to sync the workspace MEMORY.md title + `## Role`.
  *  Pass the full current values (not just the changed field); the daemon rewrites only those, preserving the rest. */
 export async function syncAgentProfile(serverId: string, agentId: string, displayName: string, description?: string | null): Promise<void> {
