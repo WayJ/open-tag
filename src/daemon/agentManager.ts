@@ -22,6 +22,11 @@ const DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_DELIVER_DEBOUNCE_MS ?? 3
 const ONE_SHOT_DELIVER_DEBOUNCE_MS = Number(process.env.OPEN_TAG_ONE_SHOT_DELIVER_DEBOUNCE_MS ?? process.env.OPEN_TAG_HERMES_DELIVER_DEBOUNCE_MS ?? 500); // One-shot runtimes need a short fixed wait when there is only one live notice.
 const PENDING_DELIVER_TTL_MS = Number(process.env.OPEN_TAG_PENDING_DELIVER_TTL_MS ?? 15_000); // start+deliver can arrive back-to-back; keep deliver briefly while start prepares workspace
 const MEMORY_UPLOAD_DEBOUNCE_MS = Number(process.env.OPEN_TAG_MEMORY_UPLOAD_DEBOUNCE_MS ?? 2000); // turn-end quiet window before the managed-memory snapshot is read + uploaded
+// How long startNow() waits for the runtime's initial turn admission before failing the start. A
+// runtime that spawns but never admits (expired claude auth, proxy blackhole) would otherwise pin
+// the scope in "starting" forever and leak its budget slot — the idle timer only arms AFTER
+// admission, so nothing else would ever clean it up.
+const START_ADMISSION_TIMEOUT_MS = Number(process.env.OPEN_TAG_START_ADMISSION_TIMEOUT_MS ?? 3 * 60_000);
 
 /** Session scope carried in the daemon protocol: one persistent runtime session per (agent, channel|thread). */
 export interface AgentScope { type: "channel" | "thread"; id: string; sessionId: string | null }
@@ -65,6 +70,7 @@ interface AgentManagerOptions {
   beforeRuntimeDelivery?: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   machineId?: string; // stable machine identity, uplinked with each memory snapshot (wire symmetry; the server uses the connection identity)
   memoryUploadDebounceMs?: number;
+  admissionTimeoutMs?: number; // startNow aborts (failStart path) if the runtime never admits the initial turn
   // Daemon-initiated managed-memory fetch ("memory:get" RPC → "memory:data" waiter, wired in
   // index.ts). Resolves the server snapshot, or undefined on timeout / no row — the restore then
   // behaves exactly as "no server row". Undefined option → restore never pulls (skip-only).
@@ -101,6 +107,7 @@ export class AgentManager {
   private beforeRuntimeDelivery: (agentId: string, meta: Pick<DeliverMeta, "deliveryId" | "seq">) => Promise<void>;
   private machineId?: string;
   private memoryUploadDebounceMs: number;
+  private admissionTimeoutMs: number;
   private fetchMemory: (agentId: string) => Promise<Record<string, string> | undefined>;
   private budget: ResourceBudget;
   private startQueue: QueuedStart[] = [];
@@ -118,6 +125,7 @@ export class AgentManager {
     this.beforeRuntimeDelivery = opts.beforeRuntimeDelivery ?? (async () => {});
     this.machineId = opts.machineId;
     this.memoryUploadDebounceMs = opts.memoryUploadDebounceMs ?? MEMORY_UPLOAD_DEBOUNCE_MS;
+    this.admissionTimeoutMs = opts.admissionTimeoutMs ?? START_ADMISSION_TIMEOUT_MS;
     this.fetchMemory = opts.fetchMemory ?? (async () => undefined);
     // Memory pressure monitor: every 10s, cap running agents if free < 500 MB
     const pressureTimer = setInterval(() => this.checkMemoryPressure(), 10_000);
@@ -742,7 +750,14 @@ export class AgentManager {
     }
     running.pid = running.session.pid ?? 0;
 
-    await running.initialAdmission.promise;
+    // Bounded wait: a spawned-but-never-admitting runtime (expired auth, blackholed proxy) must not
+    // hold the scope in "starting" forever. The throw lands in failStart (via launchStart), which
+    // stops the process, releases the budget slot, and rejects pending deliveries.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`runtime initial turn admission timed out after ${this.admissionTimeoutMs}ms: ${agentId}`)), this.admissionTimeoutMs);
+      timer.unref?.();
+      running.initialAdmission.promise.then(() => { clearTimeout(timer); resolve(); }, (error) => { clearTimeout(timer); reject(error); });
+    });
     this.assertStartActive(key, attempt);
     if (this.agents.get(key) !== running) throw new Error(`runtime exited before start completed: ${agentId}`);
 

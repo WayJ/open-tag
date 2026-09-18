@@ -139,3 +139,56 @@ test("onTrajectory re-arms the idle timer (codex emits only trajectory during tu
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── Bug 2: starting admission must time out (spawned-but-never-admitting runtime) ──
+
+test("a runtime that spawns but never admits fails the start after the admission timeout", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-sched-admission-timeout-"));
+  const sent: any[] = [];
+  let stopCalls = 0;
+  const runtime: Runtime = {
+    name: "never-admits",
+    start(_opts: StartOpts, cb: RuntimeCallbacks): RuntimeSession {
+      return {
+        delivered: [],
+        deliver: async (text) => { void text; },
+        stop: () => { stopCalls++; cb.onExit(0); },
+      };
+    },
+  };
+  const budget = new ResourceBudget({ availableMemMB: () => 999999 });
+  const mgr = newManager(root, runtime, (m) => sent.push(m), { budget, admissionTimeoutMs: 25 });
+  try {
+    const agentId = "agent-admission-timeout";
+    const startPromise = mgr.start(agentId, baseConfig(agentId));
+    const deliverPromise = mgr.deliver(agentId, "Alice", agentId, false, { targetName: "#ch", msgShort: "m1" });
+    await assert.rejects(startPromise, /initial turn admission timed out/,
+      "the start must fail loudly instead of being stuck in 'starting' forever");
+    await assert.rejects(deliverPromise, /admission/,
+      "pending deliveries must be rejected so the server can retry");
+    assert.equal(stopCalls, 1, "the stuck runtime process must be stopped by the failStart path");
+    assert.deepEqual(mgr.running(), [], "no scope may survive the failed start");
+    assert.equal(budget.pendingStarts, 0, "the budget slot must be released");
+    assert.equal(sent.filter((m) => m.type === "agent:status" && m.status === "active").length, 0,
+      "a timed-out start must never report the agent as active");
+    mgr.stopAll();
+  } finally {
+    mgr.stopAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a runtime that admits within the window is unaffected by the admission timeout", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-sched-admission-ok-"));
+  const { runtime } = doneTurnRuntime();
+  const mgr = newManager(root, runtime, undefined, { admissionTimeoutMs: 30_000 });
+  try {
+    const agentId = "agent-admission-ok";
+    await mgr.start(agentId, baseConfig(agentId));
+    assert.deepEqual(mgr.running(), [agentId], "a normal start completes well inside the window");
+    mgr.stopAll();
+  } finally {
+    mgr.stopAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
