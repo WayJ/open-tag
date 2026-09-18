@@ -3,7 +3,7 @@ import type { ServerCtx } from "./ctx.js";
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { requireCap } from "../capabilities.js";
-import { addChannelMembers, getOrCreateDM, getOrCreateThread, wakeAgentForLifecycleNotice } from "../core.js";
+import { addChannelMembers, getOrCreateDM, getOrCreateThread, mentionCandidates, wakeAgentForLifecycleNotice } from "../core.js";
 import { publish } from "../realtime.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
 import { canonicalDmParticipantIds, canUserReadChannel, canUserWriteChannel, classifyAgentDm, isAgentDmAuditChannel } from "../channelAccess.js";
@@ -246,6 +246,24 @@ export async function handleChannels(ctx: ServerCtx): Promise<boolean> {
   // scopes results to channels the user can still access (never leak a private/thread they were removed from)
   // and yields lastReadSeq for the read flag.
   if (p === "/api/announcements/active" && method === "GET") return (sendJson(res, 200, { announcements: [] }), true);
+  // Channel-scoped @-mention candidates: the composer picker's single source of truth (members +
+  // the channel's @-reach pull-ins — thread inherits its parent — minus the requester). Same read
+  // gate as the members route below; existence-hiding 404s, never 403 (IDOR-B2). avatarUrl is
+  // enriched here from agents/users because the pool's Member rows carry names only.
+  const mcand = /^\/api\/channels\/([^/]+)\/mention-candidates$/.exec(p);
+  if (mcand && method === "GET") {
+    if (!isUuid(mcand[1]!)) return (sendErr(res, 404, "channel not found"), true);
+    const mch = (await db.select().from(schema.channels).where(and(eq(schema.channels.id, mcand[1]!), eq(schema.channels.serverId, serverId), isNull(schema.channels.deletedAt))))[0];
+    if (!mch) return (sendErr(res, 404, "channel not found"), true);
+    if (!(await canUserReadChannel(serverId, mch.id, userId))) return (sendErr(res, 404, "channel not found"), true);
+    const rows = await mentionCandidates(serverId, mch, userId);
+    const agentIds = rows.filter((r) => r.type === "agent").map((r) => r.id);
+    const agAv = agentIds.length ? await db.select({ id: schema.agents.id, avatarUrl: schema.agents.avatarUrl }).from(schema.agents).where(inArray(schema.agents.id, agentIds)) : [];
+    const userIds = rows.filter((r) => r.type === "user").map((r) => r.id);
+    const usAv = userIds.length ? await db.select({ id: schema.users.id, avatarUrl: schema.users.avatarUrl }).from(schema.users).where(inArray(schema.users.id, userIds)) : [];
+    const av = new Map<string, string | null>([...agAv, ...usAv].map((r) => [r.id, r.avatarUrl ?? null]));
+    return (sendJson(res, 200, { candidates: rows.map((r) => ({ id: r.id, name: r.name, displayName: r.displayName, avatarUrl: av.get(r.id) ?? null, kind: r.type === "user" ? "human" : "agent", member: r.member })) }), true);
+  }
   const cmem = /^\/api\/channels\/([^/]+)\/members$/.exec(p);
   if (cmem && !isUuid(cmem[1]!)) return (sendErr(res, 404, "channel not found"), true); // covers GET/POST/DELETE below — non-uuid would throw in the ownership pre-query
   if (cmem && method === "GET") {

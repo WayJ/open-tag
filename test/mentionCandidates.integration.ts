@@ -8,8 +8,36 @@
 import { assertIntegrationDbIsolated } from "./integrationDbGuard.ts";
 assertIntegrationDbIsolated("test/mentionCandidates.integration.ts");
 import { eq } from "drizzle-orm";
+import { EventEmitter } from "node:events";
+import { Readable, type IncomingMessage } from "node:stream";
+import type { ServerResponse } from "node:http";
 import { db, schema } from "../src/db/index.ts";
 import { mentionCandidates } from "../src/server/core.ts";
+import { handleApi } from "../src/server/routes-api/index.ts";
+import { signUser } from "../src/server/auth.ts";
+
+// In-process HTTP harness (same shape as test/channelAccessB2.integration.ts): full gate stack, no port.
+function makeReq(method: string, path: string, token: string, sid: string): IncomingMessage {
+  const readable = Readable.from([] as Buffer[]);
+  return Object.assign(readable, { method, url: path, headers: { authorization: `Bearer ${token}`, "x-server-id": sid, "content-type": "application/json" } }) as unknown as IncomingMessage;
+}
+function makeRes(): { res: ServerResponse; status: () => number; body: () => any } {
+  let status = 0; let raw = "";
+  const emitter = new EventEmitter();
+  const res = Object.assign(emitter, {
+    statusCode: 0, headersSent: false,
+    setHeader(_n: string, _v: unknown) {},
+    writeHead(code: number) { status = code; this.statusCode = code; },
+    end(d?: string | Buffer) { raw = d ? String(d) : ""; emitter.emit("finish"); },
+  }) as unknown as ServerResponse;
+  const body = () => { try { return JSON.parse(raw); } catch { return raw; } };
+  return { res, status: () => status, body };
+}
+async function apiGet(path: string, token: string, sid: string): Promise<{ status: number; body: any }> {
+  const { res, status, body } = makeRes();
+  await handleApi(makeReq("GET", path, token, sid), res, new URL(path, "http://localhost:7777"), "GET");
+  return { status: status(), body: body() };
+}
 
 const ts = Date.now();
 let serverId = "", requesterId = "", otherHumanId = "";
@@ -94,6 +122,26 @@ async function main() {
   ids = names(rows);
   check("public parent's thread reaches the workspace (A2 present)", ids.has(a2));
   check("thread member A1 member:true, non-participant A2 member:false", rows.find((x) => x.id === a1)?.member === true && rows.find((x) => x.id === a2)?.member === false);
+
+  console.log("\n[4] route: shape, kind/avatarUrl mapping, and existence-hiding auth negatives");
+  const reqToken = signUser(requesterId);
+  const pub = await apiGet(`/api/channels/${pubId}/mention-candidates`, reqToken, serverId);
+  check("public channel 200 with candidates[]", pub.status === 200 && Array.isArray(pub.body?.candidates));
+  const shapeOk = (pub.body?.candidates ?? []).every((c: any) => typeof c.id === "string" && typeof c.name === "string" && ("avatarUrl" in c) && (c.kind === "agent" || c.kind === "human") && typeof c.member === "boolean");
+  check("candidate shape: id/name/avatarUrl/kind(human not user)/member", shapeOk);
+  check("route excludes requester and flags members like the core fn", !(pub.body?.candidates ?? []).some((c: any) => c.id === requesterId) && (pub.body?.candidates ?? []).some((c: any) => c.id === a1 && c.member === true));
+  const priv = await apiGet(`/api/channels/${privId}/mention-candidates`, reqToken, serverId);
+  check("private channel 200, members only", priv.status === 200 && (priv.body?.candidates ?? []).every((c: any) => [a1].includes(c.id)));
+  const thread = await apiGet(`/api/channels/${threadId}/mention-candidates`, reqToken, serverId);
+  check("thread 200 reaching the workspace", thread.status === 200 && (thread.body?.candidates ?? []).some((c: any) => c.id === a2 && c.member === false));
+  // Auth negatives — existence-hiding 404s, never 403 (IDOR-B2 convention).
+  const h2Token = signUser(otherHumanId);
+  const h2priv = await apiGet(`/api/channels/${privId}/mention-candidates`, h2Token, serverId);
+  check("non-member human on a private channel → 404", h2priv.status === 404);
+  const cross = await apiGet(`/api/channels/00000000-0000-4000-8000-000000000000/mention-candidates`, reqToken, serverId);
+  check("cross-tenant channel uuid → 404", cross.status === 404);
+  const nonUuid = await apiGet(`/api/channels/not-a-uuid/mention-candidates`, reqToken, serverId);
+  check("non-uuid → 404", nonUuid.status === 404);
 }
 
 main()
