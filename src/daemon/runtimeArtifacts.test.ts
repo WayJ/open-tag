@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeRuntimeArtifact } from "./runtimeArtifacts.js";
+import { linkDirSync } from "./testLinks.js";
 
 test("managed runtime artifacts stay below the agent state directory", () => {
   const root = mkdtempSync(path.join(tmpdir(), "open-tag-runtime-artifact-"));
@@ -23,7 +24,7 @@ test("managed runtime artifacts reject a symlinked parent directory", () => {
   const outside = mkdtempSync(path.join(tmpdir(), "open-tag-runtime-artifact-outside-"));
   try {
     mkdirSync(path.join(root, ".runtime"));
-    symlinkSync(outside, path.join(root, ".runtime", "test"), "dir");
+    linkDirSync(outside, path.join(root, ".runtime", "test"));
 
     assert.throws(
       () => writeRuntimeArtifact(root, "test", "instructions/prompt.md", "escaped\n"),
