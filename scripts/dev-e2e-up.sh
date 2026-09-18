@@ -10,7 +10,12 @@ PORT=$(val PORT)
 KEY=$(val DAEMON_BOOTSTRAP_KEY)
 HOME_DIR=$(val OPEN_TAG_HOME | sed "s|^\$HOME|$HOME|; s|^~|$HOME|")
 : "${PORT:?PORT missing in .env}" "${KEY:?DAEMON_BOOTSTRAP_KEY missing in .env}"
-RUN="${HOME_DIR:-$HOME/.open-tag}"
+# EXPORT, not just resolve: unlike the server (src/env.ts auto-loads .env), the daemon reads
+# OPEN_TAG_HOME from its process env at module load (src/paths.ts). Without this export every
+# worktree daemon silently falls back to ~/.open-tag — all worktrees share one agent-workspace
+# dir and machine-id, breaking the isolation wt:add promises.
+export OPEN_TAG_HOME="${HOME_DIR:-$HOME/.open-tag}"
+RUN="$OPEN_TAG_HOME"
 
 command -v claude >/dev/null 2>&1 || { echo "✗ 'claude' CLI not found on PATH — install + authenticate it before dev:e2e (agents won't run otherwise)"; exit 1; }
 
