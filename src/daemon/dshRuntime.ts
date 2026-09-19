@@ -24,8 +24,14 @@ export function buildDshArgs(p: { authToken: string }): string[] {
 export function mapAcpUpdate(update: unknown): TrajectoryEntry[] {
   const u = update as { sessionUpdate?: string; content?: unknown; title?: unknown } | null;
   if (!u || typeof u.sessionUpdate !== "string") return [];
-  if (u.sessionUpdate === "agent_message_chunk") return [{ kind: "text", text: clip(textOf(u.content)) }];
-  if (u.sessionUpdate === "agent_thought_chunk") return [{ kind: "thinking", text: clip(textOf(u.content)) }];
+  if (u.sessionUpdate === "agent_message_chunk") {
+    const text = textOf(u.content);
+    return text ? [{ kind: "text", text: clip(text) }] : []; // non-text blocks (image/…) → nothing to say
+  }
+  if (u.sessionUpdate === "agent_thought_chunk") {
+    const text = textOf(u.content);
+    return text ? [{ kind: "thinking", text: clip(text) }] : [];
+  }
   if (u.sessionUpdate === "tool_call") return [{ kind: "tool", toolName: clip(u.title), toolInput: "" }];
   return []; // usage_update, plan, anything unknown — not trajectory
 }

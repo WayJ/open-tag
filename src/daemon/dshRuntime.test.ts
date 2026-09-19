@@ -51,6 +51,13 @@ test("mapAcpUpdate maps tool_call (ACP v1) to a tool entry", () => {
   ]);
 });
 
+test("mapAcpUpdate drops non-text content blocks instead of emitting empty text entries", () => {
+  // ACP content blocks may be image/resource blocks with no .text — nothing trajectory-worthy.
+  assert.deepEqual(mapAcpUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "image", data: "…" } }), []);
+  assert.deepEqual(mapAcpUpdate({ sessionUpdate: "agent_thought_chunk", content: { type: "image", data: "…" } }), []);
+  assert.deepEqual(mapAcpUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text" } }), []);
+});
+
 test("mapAcpUpdate ignores unknown/shapeless updates and clips long text", () => {
   assert.deepEqual(mapAcpUpdate({ sessionUpdate: "plan" }), []);
   assert.deepEqual(mapAcpUpdate({ nope: true }), []);
@@ -58,6 +65,11 @@ test("mapAcpUpdate ignores unknown/shapeless updates and clips long text", () =>
   const long = "x".repeat(3000);
   const entries = mapAcpUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: long } });
   assert.equal(entries[0]?.text?.length, 2000);
+  // long tool titles clip in both the trajectory entry and the activity detail
+  const longTitle = "t".repeat(3000);
+  const toolUpdate = { sessionUpdate: "tool_call", toolCallId: "tc-long", title: longTitle, status: "in_progress" };
+  assert.equal(mapAcpUpdate(toolUpdate)[0]?.toolName?.length, 2000);
+  assert.equal(acpActivity(toolUpdate)?.detail.length, 2000);
 });
 
 test("acpActivity surfaces in-progress tool calls as working and message chunks as thinking", () => {
@@ -141,6 +153,24 @@ test("createDeliverQueue propagates rejection to its caller and keeps draining",
   await assert.rejects(p1, /boom/);
   assert.equal(await p2, "after-failure");
   assert.deepEqual(started, [1, 2]);
+});
+
+test("createDeliverQueue propagates a sync-throwing task to its caller and keeps draining", async () => {
+  const queue = createDeliverQueue();
+  const started: number[] = [];
+  // The run signature promises a Promise return; a task that throws synchronously is still
+  // invoked inside the chain, so its caller rejects and the queue moves on unharmed.
+  const bad = queue.run((() => {
+    throw new Error("sync boom");
+  }) as () => Promise<string>);
+  const next = queue.run(async () => {
+    started.push(2);
+    return "after-sync-throw";
+  });
+
+  await assert.rejects(bad, /sync boom/);
+  assert.equal(await next, "after-sync-throw");
+  assert.deepEqual(started, [2]);
 });
 
 test("createDeliverQueue drains a three-task chain in order", async () => {
