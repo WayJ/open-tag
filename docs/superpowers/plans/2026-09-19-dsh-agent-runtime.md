@@ -119,7 +119,7 @@ git worktree add ../dsh-work-opentag -b feature/opentag-agent-runtime
 }
 ```
 
-- [ ] **Step 3:** 写 `build.mjs`（拷 brand-profile 的 build.mjs，只保留 host 半体：`lib/index.js` 单入口 ESM bundle，deps/peerDeps 全 external）。LICENSE 放 dsh-work 根 LICENSE 同文（MIT，版权行与 dsh-work 根一致）。`.gitignore`：`node_modules/\nlib/\n`.
+- [ ] **Step 3:** 写 `build.mjs`（拷 brand-profile 的 build.mjs，只保留 host 半体，**双入口**：`src/index.ts → lib/index.js` + `src/app.ts → lib/app.js`，deps/peerDeps 全 external；见 B3 注 2）。LICENSE 放 dsh-work 根 LICENSE 同文（MIT，版权行与 dsh-work 根一致）。`.gitignore`：`node_modules/\nlib/\n`.
 
 - [ ] **Step 4:** 提交：
 
