@@ -1,17 +1,24 @@
-// Pure-function layer for the DSH runtime (ACP client helpers) — no process/IO here.
-// Shapes ground-truthed against real captures in
+// DSH runtime: pure ACP helpers (D1) + Runtime wiring tests (D2, integration with a fake `dsh`
+// over stdio). Shapes ground-truthed against real captures in
 // dsh-work-opentag/plugins/dsh-opentag-agent-runtime/tests/fixtures/ (session-updates.ndjson,
-// prompt-response.json). Task D2 wires these into the Runtime implementation.
+// prompt-response.json) and the committed copy src/daemon/__fixtures__/dsh-session-new.json.
 // Run: npx tsx --test src/daemon/dshRuntime.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { StartOpts, TrajectoryEntry } from "./runtime.js";
 import {
   acpActivity,
   buildDshArgs,
   createDeliverQueue,
+  dshRuntime,
   mapAcpUpdate,
   parseAcpPromptStopReason,
   permissionAnswer,
+  resolveDshEffortValue,
+  resolveDshModelValue,
 } from "./dshRuntime.js";
 
 test("buildDshArgs passes profile and auth token", () => {
@@ -192,4 +199,422 @@ test("parseAcpPromptStopReason extracts result.stopReason, null-safe", () => {
   assert.equal(parseAcpPromptStopReason({ result: { stopReason: 42 } }), null);
   assert.equal(parseAcpPromptStopReason(null), null);
   assert.equal(parseAcpPromptStopReason(undefined), null);
+});
+
+// resolveDshModelValue / resolveDshEffortValue narrow opts.model / reasoningEffort to the exact
+// select `value` a session offered. Fixture shape: grouped model select with JSON [provider,model]
+// pair leaves + flat reasoning_effort select (src/daemon/__fixtures__/dsh-session-new.json).
+const MODEL_OPTIONS = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: '["deepseek-official","deepseek-v4-flash"]',
+    options: [
+      {
+        group: "deepseek-official",
+        name: "DeepSeek",
+        options: [
+          { value: '["deepseek-official","deepseek-v4-flash"]', name: "deepseek-v4-flash" },
+          { value: '["deepseek-official","deepseek-v4-pro"]', name: "DeepSeek-V4-Pro" },
+        ],
+      },
+      {
+        group: "zai-coding-cn",
+        name: "zai-coding-cn",
+        options: [{ value: '["zai-coding-cn","glm-5.3"]', name: "GLM-5.3" }],
+      },
+    ],
+  },
+  {
+    id: "reasoning_effort",
+    name: "Reasoning effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "off", name: "Off" },
+      { value: "low", name: "Low" },
+      { value: "high", name: "High" },
+      { value: "max", name: "Max" },
+    ],
+  },
+];
+
+test("resolveDshModelValue matches by model part, provider/model, raw value, and display name", () => {
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, "glm-5.3"), '["zai-coding-cn","glm-5.3"]');
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, "zai-coding-cn/glm-5.3"), '["zai-coding-cn","glm-5.3"]');
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, '["zai-coding-cn","glm-5.3"]'), '["zai-coding-cn","glm-5.3"]');
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, "DeepSeek-V4-Pro"), '["deepseek-official","deepseek-v4-pro"]');
+  // not offered / shapeless input → null (caller keeps the session default)
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, "gpt-9"), null);
+  assert.equal(resolveDshModelValue(MODEL_OPTIONS, ""), null);
+  assert.equal(resolveDshModelValue(null, "glm-5.3"), null);
+  assert.equal(resolveDshModelValue([{ id: "model", options: [{ value: 42 }] }], "glm-5.3"), null);
+});
+
+test("resolveDshEffortValue matches an offered value (or display name), null when unoffered", () => {
+  assert.equal(resolveDshEffortValue(MODEL_OPTIONS, "max"), "max");
+  assert.equal(resolveDshEffortValue(MODEL_OPTIONS, "High"), "high"); // name match, case-insensitive
+  assert.equal(resolveDshEffortValue(MODEL_OPTIONS, "medium"), null); // dsh offers off/low/high/max only
+  assert.equal(resolveDshEffortValue(null, "max"), null);
+  assert.equal(resolveDshEffortValue([{ id: "reasoning_effort", options: [] }], "max"), null);
+});
+
+// ------------------------------------------------------------ Runtime wiring --
+// Integration tests against a fake `dsh` executable (node script with a shebang, resolved via a
+// PATH-only env — same mechanism as codexRuntime.test.ts). The fake speaks the ACP wire protocol
+// captured from the real derived server: initialize → authenticate → opentag/auth →
+// opentag/setSystemPrompt → session/new|resume → session/prompt (+ session/update notifications
+// and session/request_permission server requests). Behavior switches ride in via FAKE_DSH_* env.
+
+const log = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as any;
+const waitFor = async (predicate: () => boolean, timeoutMs = 5_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for runtime callback");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+};
+
+interface FakeRun {
+  session: ReturnType<typeof dshRuntime.start>;
+  admissions: Array<Error | undefined>;
+  activities: Array<{ activity: string; detail?: string }>;
+  trajectory: TrajectoryEntry[];
+  sessionIds: Array<string | null>;
+  exitCodes: Array<number | null>;
+}
+
+function writeFakeDsh(root: string): void {
+  const script = [
+    `#!${process.execPath}`,
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'const readline = require("node:readline");',
+    'const recordFile = path.join(process.cwd(), "requests.jsonl");',
+    'const record = (line) => { try { fs.appendFileSync(recordFile, line + "\\n"); } catch {} };',
+    'const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\\n");',
+    'const ok = (id, result) => send({ jsonrpc: "2.0", id, result });',
+    'const fail = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });',
+    'const argvToken = (() => { const i = process.argv.indexOf("--opentag-auth-token"); return i >= 0 ? process.argv[i + 1] : null; })();',
+    'const MODE = process.env.FAKE_DSH_MODE ?? "";',
+    `const configOptions = ${JSON.stringify(MODEL_OPTIONS)};`,
+    "let authed = false;",
+    "let promptCount = 0;",
+    "let permissionWaiter = null;",
+    'const waitFlag = (flag, fn) => { const t = setInterval(() => { if (fs.existsSync(path.join(process.cwd(), flag))) { clearInterval(t); fn(); } }, 2); };',
+    "const runTurn = (id, params) => {",
+    '  const update = (update) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update } });',
+    "  if (process.env.FAKE_DSH_TOOLS) {",
+    '    update({ sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read file", kind: "read", status: "pending" });',
+    '    update({ sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read file", kind: "read", status: "in_progress" });',
+    "  }",
+    '  update({ sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "hello" } });',
+    "  if (process.env.FAKE_DSH_PERM) {",
+    "    const permId = 900 + promptCount;",
+    "    permissionWaiter = { id: permId, fn: () => ok(id, { stopReason: \"end_turn\" }) };",
+    '    send({ jsonrpc: "2.0", id: permId, method: "session/request_permission", params: { sessionId: params.sessionId, options: [',
+    '      { optionId: "reject_once", kind: "reject_once", name: "Reject" },',
+    '      { optionId: "allow_once", kind: "allow_once", name: "Allow" },',
+    "    ] } });",
+    "    return;",
+    "  }",
+    '  ok(id, { stopReason: "end_turn" });',
+    "};",
+    'const rl = readline.createInterface({ input: process.stdin });',
+    'rl.on("line", (line) => {',
+    "  let msg; try { msg = JSON.parse(line); } catch { return; }",
+    '  if (msg.id !== undefined && msg.method === undefined) { // client reply to a server request',
+    "    if (permissionWaiter && msg.id === permissionWaiter.id) {",
+    '      record(JSON.stringify({ method: "permission_reply", params: msg }));',
+    "      const fn = permissionWaiter.fn; permissionWaiter = null; fn(msg);",
+    "    }",
+    "    return;",
+    "  }",
+    "  record(line);",
+    "  if (msg.id === undefined) return; // client notification (session/cancel) — recorded only",
+    "  const p = msg.params ?? {};",
+    '  if (msg.method === "initialize") {',
+    "    const authMethods = process.env.FAKE_DSH_AUTH_ID ? [{ id: process.env.FAKE_DSH_AUTH_ID, description: \"\" }] : [];",
+    '    ok(msg.id, { protocolVersion: 1, agentCapabilities: {}, authMethods });',
+    '  } else if (msg.method === "authenticate") {',
+    "    ok(msg.id, {});",
+    '  } else if (msg.method === "opentag/auth") {',
+    '    if (MODE === "auth-fail" || p.token !== argvToken) fail(msg.id, -32000, "opentag: authentication failed");',
+    "    else { authed = true; ok(msg.id, {}); }",
+    '  } else if (msg.method === "opentag/setSystemPrompt") {',
+    '    if (!authed) fail(msg.id, -32000, "opentag: not authenticated");',
+    '    else if (typeof p.text !== "string" || p.text.length === 0) fail(msg.id, -32602, "opentag: text parameter required");',
+    "    else ok(msg.id, {});",
+    '  } else if (msg.method === "session/new") {',
+    '    ok(msg.id, { sessionId: "s1", configOptions });',
+    '  } else if (msg.method === "session/resume") {',
+    "    ok(msg.id, { configOptions });",
+    '  } else if (msg.method === "session/set_config_option") {',
+    "    ok(msg.id, { configOptions });",
+    '  } else if (msg.method === "session/prompt") {',
+    "    promptCount += 1;",
+    "    if (process.env.FAKE_DSH_GATE && promptCount === 1) {",
+    '      fs.writeFileSync(path.join(process.cwd(), "turn1-started"), "1");',
+    '      waitFlag("release-turn1", () => runTurn(msg.id, p));',
+    "      return;",
+    "    }",
+    "    runTurn(msg.id, p);",
+    '  } else if (msg.method === "session/close") {',
+    "    ok(msg.id, {});",
+    "  } else {",
+    '    fail(msg.id, -32601, "no such method: " + msg.method);',
+    "  }",
+    "});",
+    'rl.on("close", () => process.exit(0));',
+    "",
+  ].join("\n");
+  const executable = path.join(root, "dsh");
+  writeFileSync(executable, script);
+  chmodSync(executable, 0o755);
+}
+
+function startFake(
+  root: string,
+  opts: Partial<StartOpts> = {},
+  envExtra: Record<string, string> = {},
+): FakeRun {
+  writeFakeDsh(root);
+  const run: FakeRun = {
+    session: undefined as unknown as FakeRun["session"],
+    admissions: [],
+    activities: [],
+    trajectory: [],
+    sessionIds: [],
+    exitCodes: [],
+  };
+  run.session = dshRuntime.start({
+    cwd: root,
+    stateDir: root,
+    env: { PATH: root, ...envExtra },
+    systemPrompt: "system-prompt",
+    initialPrompt: "start-nudge",
+    ...opts,
+  }, {
+    onSession: (sessionId) => run.sessionIds.push(sessionId),
+    onInitialTurnAdmission: (error) => run.admissions.push(error),
+    onActivity: (activity, detail) => run.activities.push({ activity, detail }),
+    onTrajectory: (entries) => run.trajectory.push(...entries),
+    onExit: (code) => run.exitCodes.push(code),
+    log,
+  });
+  return run;
+}
+
+function readRequests(root: string): Array<Record<string, any>> {
+  try {
+    return readFileSync(path.join(root, "requests.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  } catch { return []; }
+}
+
+/** stop() then wait for the child to actually exit before rmSync — the fake's cwd is the temp
+ * dir, and Windows refuses to delete the cwd of a live process (EPERM). Never stop() twice: the
+ * second call would only schedule another killTree whose synchronous taskkill lands in the next
+ * test and blocks its event loop. */
+async function cleanup(run: FakeRun | undefined, root: string): Promise<void> {
+  try {
+    if (run && run.exitCodes.length === 0) {
+      run.session.stop();
+      await waitFor(() => run.exitCodes.length > 0, 5_000).catch(() => {});
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const request = (root: string, method: string) => readRequests(root).filter((r) => r.method === method);
+const promptTexts = (root: string) => request(root, "session/prompt").map((r) => r.params?.prompt?.[0]?.text);
+
+test("dsh handshake completes: session id, initial prompt, trajectory, activity", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-happy-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root);
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined, "initial turn must be admitted");
+    assert.deepEqual(run.sessionIds, ["s1"]);
+
+    const methods = readRequests(root).filter((r) => r.method).map((r) => r.method);
+    // Handshake order is load-bearing: authenticate must precede opentag/auth, persona precede session/new.
+    assert.deepEqual(
+      methods.filter((m) => ["initialize", "authenticate", "opentag/auth", "opentag/setSystemPrompt", "session/new", "session/prompt"].includes(m)),
+      ["initialize", "authenticate", "opentag/auth", "opentag/setSystemPrompt", "session/new", "session/prompt"],
+    );
+    // authMethods was empty in the initialize response → authenticate falls back to "open-tag"
+    assert.equal(request(root, "authenticate")[0]?.params?.methodId, "open-tag");
+    const auth = request(root, "opentag/auth")[0];
+    assert.match(auth?.params?.token ?? "", /^[0-9a-f]{64}$/, "spawn token is 32B hex and is echoed over the protocol");
+    assert.equal(request(root, "opentag/setSystemPrompt")[0]?.params?.text, "system-prompt");
+    assert.equal(request(root, "session/new")[0]?.params?.cwd, root);
+    assert.deepEqual(promptTexts(root), ["start-nudge"]);
+
+    assert.ok(run.trajectory.some((e) => e.kind === "text" && e.text === "hello"));
+    assert.ok(run.activities.some((e) => e.activity === "thinking"));
+    assert.equal(run.activities.at(-1)?.activity, "online");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("authenticate uses the first offered authMethod id when the server advertises one", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-authid-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_AUTH_ID: "method-x" });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined);
+    assert.equal(request(root, "authenticate")[0]?.params?.methodId, "method-x");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("session/resume replaces session/new and keeps the resumed session id", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-resume-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, { sessionId: "s1" });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined);
+    assert.equal(request(root, "session/new").length, 0);
+    assert.equal(request(root, "session/resume")[0]?.params?.sessionId, "s1");
+    assert.equal(request(root, "session/resume")[0]?.params?.cwd, root);
+    assert.deepEqual(run.sessionIds, ["s1"]);
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("deliver resolves when the turn completes and the queue serializes turns", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-queue-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_GATE: "1" });
+    const second = run.session.deliver("second-turn");
+    await waitFor(() => existsSync(path.join(root, "turn1-started")));
+    assert.equal(request(root, "session/prompt").length, 1, "turn 2 must not start while turn 1 is in flight");
+    writeFileSync(path.join(root, "release-turn1"), "go");
+    await second;
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined);
+    assert.deepEqual(promptTexts(root), ["start-nudge", "second-turn"]);
+    assert.equal(run.activities.at(-1)?.activity, "online");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("tool_call re-emissions map to one trajectory entry but keep feeding activity", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-tooldup-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_TOOLS: "1" });
+    await waitFor(() => run!.admissions.length > 0);
+    const toolEntries = run.trajectory.filter((e) => e.kind === "tool");
+    assert.equal(toolEntries.length, 1, "pending + in_progress for the same toolCallId → ONE trajectory entry");
+    assert.equal(toolEntries[0]?.toolName, "Read file");
+    assert.ok(run.trajectory.some((e) => e.kind === "text" && e.text === "hello"));
+    const working = run.activities.filter((e) => e.activity === "working" && e.detail === "Read file");
+    assert.equal(working.length, 2, "both status emissions still surface as working activity");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("session/request_permission is answered with the first allow option", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-perm-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_PERM: "1" });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined, "the turn completes after the permission is answered");
+    const reply = request(root, "permission_reply")[0]?.params;
+    assert.deepEqual(reply?.result?.outcome, { outcome: "selected", optionId: "allow_once" });
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("model and reasoning effort are applied via session/set_config_option before the first prompt", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-config-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, { model: "glm-5.3", runtimeConfig: { reasoningEffort: "max" } });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined);
+    const configs = request(root, "session/set_config_option");
+    assert.equal(configs.length, 2);
+    assert.deepEqual(
+      configs.map((c) => ({ configId: c.params.configId, value: c.params.value })),
+      [
+        { configId: "model", value: '["zai-coding-cn","glm-5.3"]' },
+        { configId: "reasoning_effort", value: "max" },
+      ],
+    );
+    // both config calls land between session/new and the first session/prompt
+    const order = readRequests(root).map((r) => r.method);
+    assert.ok(order.indexOf("session/set_config_option") < order.indexOf("session/prompt"));
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("an unoffered model is skipped without failing the session", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-nomodel-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, { model: "gpt-9-turbo" });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined, "unresolvable model keeps the session default and still admits the turn");
+    assert.equal(request(root, "session/set_config_option").length, 0);
+    assert.deepEqual(promptTexts(root), ["start-nudge"]);
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("opentag/auth failure rejects initial admission and reports offline", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-authfail-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_MODE: "auth-fail" });
+    const queued = assert.rejects(run.session.deliver("queued while starting"), /authentication failed/);
+    await waitFor(() => run!.admissions.length > 0);
+    await queued;
+    assert.ok(run.admissions[0] instanceof Error);
+    assert.match(run.admissions[0]!.message, /opentag: authentication failed/);
+    await waitFor(() => run!.activities.some((e) => e.activity === "offline"));
+    await waitFor(() => run!.exitCodes.length > 0);
+    assert.equal(run.admissions.length, 1, "cleanup after the fatal handshake must not settle admission twice");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("stop() sends session/cancel then session/close and the process exits", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-stop-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root);
+    await waitFor(() => run!.admissions.length > 0);
+    run.session.stop();
+    await waitFor(() => run!.exitCodes.length > 0);
+    const order = readRequests(root).map((r) => r.method);
+    const cancelAt = order.lastIndexOf("session/cancel");
+    const closeAt = order.lastIndexOf("session/close");
+    assert.ok(cancelAt >= 0, "session/cancel notification is sent");
+    assert.ok(closeAt >= 0, "session/close request is sent");
+    assert.ok(cancelAt < closeAt, "cancel precedes close");
+    const close = request(root, "session/close")[0];
+    assert.equal(close?.params?.sessionId, "s1");
+  } finally {
+    await cleanup(run, root);
+  }
 });
