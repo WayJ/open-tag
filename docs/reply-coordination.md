@@ -1,5 +1,7 @@
 # Reply coordination
 
+> 中文翻译: [`reply-coordination.zh.md`](./reply-coordination.zh.md) (translation; English is canonical).
+
 ## Problem
 
 Message persistence, observation, and publication are different actions. The current
