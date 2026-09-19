@@ -5,10 +5,11 @@
 // Run: npx tsx --test src/daemon/dshRuntime.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartOpts, TrajectoryEntry } from "./runtime.js";
+import { detectRuntimes, getRuntime } from "./runtimes.js";
 import {
   acpActivity,
   buildDshArgs,
@@ -638,5 +639,137 @@ test("stop() during handshake sends no cancel/close, kills the process, and reje
     // completing without an unhandled stdin 'error' is itself the no-crash assertion
   } finally {
     await cleanup(run, root);
+  }
+});
+
+// ---------------------------------------------- registry registration (D3) --
+// detectRuntimes shells out (`where dsh` / `command -v dsh`) against the CURRENT process env, so
+// these tests fake `dsh` by writing an executable into a tmpdir and temporarily prepending that
+// dir to process.env.PATH (restored in finally). The opentag profile dir gate is exercised via
+// DSH_HOME overrides so the real ~/.dsh is never touched.
+
+/** Writes a fake `dsh` executable into dir (extension per platform so `where`/`command -v` finds it). */
+function writeFakeDshBinary(dir: string): void {
+  if (process.platform === "win32") {
+    writeFileSync(path.join(dir, "dsh.cmd"), "@echo off\r\n");
+  } else {
+    const executable = path.join(dir, "dsh");
+    writeFileSync(executable, "#!/bin/sh\n");
+    chmodSync(executable, 0o755);
+  }
+}
+
+/** Runs fn with PATH (and optionally DSH_HOME) temporarily overridden; always restores.
+ * When DSH_HOME is unset, HOME/USERPROFILE are also pointed at the fake dir so the default
+ * `homedir()/.dsh` fallback is hermetic (a real ~/.dsh on the dev machine would leak in). */
+function withFakeEnv<T>(fakeDir: string, dshHome: string | undefined, fn: () => T): T {
+  const orig: Record<"PATH" | "DSH_HOME" | "HOME" | "USERPROFILE", string | undefined> = {
+    PATH: process.env.PATH,
+    DSH_HOME: process.env.DSH_HOME,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+  };
+  process.env.PATH = `${fakeDir}${path.delimiter}${orig.PATH ?? ""}`;
+  if (dshHome === undefined) {
+    delete process.env.DSH_HOME;
+    process.env.HOME = fakeDir;
+    process.env.USERPROFILE = fakeDir;
+  } else {
+    process.env.DSH_HOME = dshHome;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(orig)) {
+      if (value === undefined) delete (process.env as Record<string, string | undefined>)[key];
+      else (process.env as Record<string, string | undefined>)[key] = value;
+    }
+  }
+}
+
+test("getRuntime('dsh') returns the dshRuntime from the registry", () => {
+  assert.equal(getRuntime("dsh"), dshRuntime);
+  // sanity: registry lookup semantics unchanged for known/unknown names
+  assert.equal(getRuntime("no-such-runtime"), null);
+});
+
+test("detectRuntimes includes dsh when the binary AND the opentag profile dir exist", () => {
+  const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-det-bin-"));
+  const home = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-det-home-"));
+  try {
+    writeFakeDshBinary(binDir);
+    const profileDir = path.join(home, "profiles", "opentag");
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(path.join(profileDir, ".keep"), "");
+    const detected = withFakeEnv(binDir, home, detectRuntimes);
+    assert.ok(detected.includes("dsh"), `expected dsh in ${JSON.stringify(detected)}`);
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("detectRuntimes omits dsh when the opentag profile dir is missing (binary present)", () => {
+  const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-noprofile-bin-"));
+  const home = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-noprofile-home-"));
+  try {
+    writeFakeDshBinary(binDir); // binary on PATH…
+    // …but DSH_HOME has no profiles/opentag → not detected
+    const detected = withFakeEnv(binDir, home, detectRuntimes);
+    assert.equal(detected.includes("dsh"), false, `expected no dsh in ${JSON.stringify(detected)}`);
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("detectRuntimes omits dsh when the binary is absent (profile dir present)", () => {
+  const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-nobin-"));
+  const home = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-nobin-home-"));
+  try {
+    // DSH_HOME points at a dir containing profiles/opentag, but nothing named dsh on PATH
+    mkdirSync(path.join(home, "profiles", "opentag"), { recursive: true });
+    writeFileSync(path.join(home, "profiles", "opentag", ".keep"), "");
+    const detected = withFakeEnv(binDir, home, detectRuntimes);
+    assert.equal(detected.includes("dsh"), false, `expected no dsh in ${JSON.stringify(detected)}`);
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("detectRuntimes respects the DSH_HOME env override", () => {
+  const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-override-bin-"));
+  const home = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-override-home-"));
+  try {
+    writeFakeDshBinary(binDir);
+    // profile exists under DSH_HOME, NOT under the default ~/.dsh → only the override makes it visible
+    mkdirSync(path.join(home, "profiles", "opentag"), { recursive: true });
+    writeFileSync(path.join(home, "profiles", "opentag", ".keep"), "");
+    const withOverride = withFakeEnv(binDir, home, detectRuntimes);
+    assert.ok(withOverride.includes("dsh"), `expected dsh in ${JSON.stringify(withOverride)}`);
+    // same fake binary, no DSH_HOME → falls back to ~/.dsh which has no profiles/opentag
+    const withoutOverride = withFakeEnv(binDir, undefined, detectRuntimes);
+    assert.equal(withoutOverride.includes("dsh"), false, `expected no dsh in ${JSON.stringify(withoutOverride)}`);
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("detectRuntimes still reports non-dsh runtimes through the unchanged pipeline", () => {
+  // No fake dsh, no DSH_HOME: "dsh" must be absent, and the result must still be a filtered
+  // subset of the registry names (cursor-agent is still mapped to cursor) — regression guard
+  // that the dsh special-case did not break the shared filter chain.
+  const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-regression-bin-"));
+  try {
+    const detected = withFakeEnv(binDir, undefined, detectRuntimes);
+    assert.equal(detected.includes("dsh"), false);
+    assert.equal(detected.includes("cursor-agent"), false, "cursor-agent must keep mapping to cursor");
+    for (const name of detected) {
+      assert.notEqual(getRuntime(name), null, `detected runtime ${name} must be registered`);
+    }
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
   }
 });
