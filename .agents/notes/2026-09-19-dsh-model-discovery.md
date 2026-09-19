@@ -52,3 +52,22 @@ dsh 没有 list-models 一次性命令——目录在 ACP `session/new` 响应�
   listModels 条目（dsh 驱动/解析/预算 + OPEN_TAG_DSH_BIN）。
 - `CHANGELOG.md` [Unreleased] Added：dsh 动态模型发现条目（版本号不在此批 bump，
   与分支既有做法一致，release 待合并时统一处理）。
+
+## E2E 修复（同日追加）
+
+E2E 活跑发现 Windows bug：`probeDshModels` 原用裸 `spawn("dsh", ...)`，Windows 上无法执行
+npm 装出的 `.cmd` shim（无 PATHEXT 解析）→ ENOENT → 探测恒 null → UI 下拉只剩 "Default"。
+daemon 侧 dsh runtime 本就走 spawnSafe，探测绕开了它。
+
+修复：`probeDshModels` 改用 `spawnSafe`（stdio pipe×3 + windowsHide 不变；OPEN_TAG_DSH_BIN
+绝对路径语义不变——spawnSafe 的 Windows 解析对带路径命令同样适用；非 Windows 由 spawnSafe
+统一 detached+cross-spawn）。回归测试：以 `.cmd` shim（win32）/可执行 shell shim（posix）包装
+最小假 ACP agent，设 OPEN_TAG_DSH_BIN 走全握手断言解析结果（顺带修掉解析器给 level 塞
+`description: undefined` 键的问题——无描述时省略该键）。
+
+活体验证（本机，`dsh.cmd` 在 PATH）：`probeDshModels(25_000)` 返回 **16 个模型**，
+默认 deepseek-official/deepseek-v4-flash（3 deepseek + 10 zai + 3 minimax），握手 ~1.5s。
+
+遗留记录（超出本任务范围，未修）：`listModels.ts` 的通用 `runList` 驱动（opencode/cursor/pi/
+claude/codex/reasonix 共用）仍是裸 `spawn(bin, ...)`，Windows .cmd shim 有同样的潜在 ENOENT
+问题；本次不动，需单独任务。

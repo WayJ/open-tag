@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { spawnSafe } from "./spawnSafe.js";
 
 export interface ThinkingLevel { value: string; label: string; description?: string }
 export interface ModelThinking { levels: ThinkingLevel[]; default?: string }
@@ -168,11 +169,11 @@ export function parseDshConfigOptions(response: unknown): DiscoveredModel[] {
   let thinking: ModelThinking | undefined;
   if (effortSelect && Array.isArray(effortSelect.options)) {
     const levels: ThinkingLevel[] = effortSelect.options
-      .map((o: any) => ({
-        value: typeof o?.value === "string" ? o.value : "",
-        label: typeof o?.name === "string" ? o.name : "",
-        description: typeof o?.description === "string" ? o.description : undefined,
-      }))
+      .map((o: any) => {
+        const l: ThinkingLevel = { value: typeof o?.value === "string" ? o.value : "", label: typeof o?.name === "string" ? o.name : "" };
+        if (typeof o?.description === "string") l.description = o.description; // omitted when absent, not undefined-keyed
+        return l;
+      })
       .filter((l: ThinkingLevel) => l.value && l.label);
     if (levels.length) {
       const cur = effortSelect.currentValue;
@@ -377,8 +378,11 @@ const DSH_PROBE_PROMPT = "probe";
 // (dsh-work-opentag/plugins/dsh-opentag-agent-runtime/tools/smoke.mjs): initialize → authenticate →
 // opentag/auth → opentag/setSystemPrompt → session/new → (capture configOptions) → session/close.
 // Binary resolution: `dsh` on PATH, or an absolute path via OPEN_TAG_DSH_BIN (the harness CLI is a
-// `node apps/cli/lib/bin.js` checkout, often not on PATH). Whole exchange bounded by timeoutMs —
-// a hung handshake, a non-NDJSON-flooded stdout, or an early exit all settle null. Never throws.
+// `node apps/cli/lib/bin.js` checkout, often not on PATH). Spawned via spawnSafe — raw spawn cannot
+// exec the .cmd shim npm installs on Windows (no PATHEXT resolution → ENOENT → probe always null;
+// the daemon-side dsh runtime hits the same class of problem and uses spawnSafe for it).
+// Whole exchange bounded by timeoutMs — a hung handshake, a non-NDJSON-flooded stdout, or an early
+// exit all settle null. Never throws.
 export function probeDshModels(timeoutMs: number): Promise<DiscoveredModel[] | null> {
   return new Promise((resolve) => {
     const bin = process.env.OPEN_TAG_DSH_BIN || "dsh";
@@ -387,7 +391,7 @@ export function probeDshModels(timeoutMs: number): Promise<DiscoveredModel[] | n
     delete env.NODE_OPTIONS; // same proxy-flag gotcha runList guards against
     let proc: ChildProcess;
     try {
-      proc = spawn(bin, ["--profile", "opentag", "--opentag-auth-token", token], { stdio: ["pipe", "pipe", "pipe"], env, windowsHide: true });
+      proc = spawnSafe(bin, ["--profile", "opentag", "--opentag-auth-token", token], { stdio: ["pipe", "pipe", "pipe"], env, windowsHide: true });
     } catch {
       return resolve(null);
     }

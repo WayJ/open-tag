@@ -7,10 +7,11 @@
 // Run: npx tsx --test src/daemon/listModels-dsh.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDshConfigOptions } from "./listModels.js";
+import { parseDshConfigOptions, probeDshModels } from "./listModels.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -184,7 +185,66 @@ test("budget pair: daemon dsh probe (25s) stays under the server WS-RPC budget (
   // runtime-models dropdown renders the static fallback (empty for dsh).
   const daemon = readFileSync(fileURLToPath(new URL("./listModels.ts", import.meta.url)), "utf8");
   assert.match(daemon, /LIST_BUDGET_MS[^;]*\{[^}]*dsh:\s*25_000/s);
+  assert.match(daemon, /spawnSafe\(bin/); // the probe must go through spawnSafe (Windows .cmd shims)
   const server = readFileSync(fileURLToPath(new URL("../server/runtimeModels.ts", import.meta.url)), "utf8");
   assert.match(server, /PROBE_BUDGET_MS[^;]*\{[^}]*dsh:\s*30_000/s);
   assert.match(server, /DYNAMIC_RUNTIMES[^;]*["']dsh["']/s);
+});
+
+// Minimal fake ACP agent: answers every request with {} and session/new with a tiny catalog.
+const FAKE_DSH_SCRIPT = `\
+import { createInterface } from "node:readline";
+const configOptions = [
+  {
+    id: "model", type: "select", currentValue: '["p1","m1"]',
+    options: [{ name: "p1", options: [
+      { value: '["p1","m1"]', name: "Model One" },
+      { value: '["p1","m2"]', name: "Model Two" },
+    ]}],
+  },
+  { id: "reasoning_effort", type: "select", currentValue: "high", options: [
+    { value: "low", name: "Low" }, { value: "high", name: "High" },
+  ]},
+];
+createInterface({ input: process.stdin }).on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg?.id === undefined) return;
+  const result = msg.method === "session/new" ? { sessionId: "fake-sid", configOptions } : {};
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\\n");
+}).on("close", () => process.exit(0));
+`;
+
+test("probeDshModels drives a full ACP probe through a launcher shim (spawnSafe regression)", async () => {
+  // The probe must spawn via spawnSafe so Windows resolves the .cmd shim npm installs (raw spawn
+  // ENOENTs on it — live E2E found the dropdown stuck on "Default" because of exactly this). We
+  // point OPEN_TAG_DSH_BIN at a launcher shim wrapping a fake ACP agent and assert the parsed list.
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-probe-"));
+  const originalBin = process.env.OPEN_TAG_DSH_BIN;
+  try {
+    writeFileSync(path.join(root, "fake-dsh.mjs"), FAKE_DSH_SCRIPT);
+    if (process.platform === "win32") {
+      writeFileSync(path.join(root, "dsh.cmd"), ["@echo off", `node "%~dp0fake-dsh.mjs"`, ""].join("\r\n"), "utf8");
+    } else {
+      const sh = path.join(root, "dsh-shim");
+      writeFileSync(sh, ["#!/bin/sh", `exec node "${path.join(root, "fake-dsh.mjs")}"`, ""].join("\n"), "utf8");
+      chmodSync(sh, 0o755);
+    }
+    const bin = path.join(root, process.platform === "win32" ? "dsh.cmd" : "dsh-shim");
+    process.env.OPEN_TAG_DSH_BIN = bin;
+    const models = await probeDshModels(15_000);
+    assert.deepEqual(models, [
+      {
+        id: "m1", label: "Model One", provider: "p1", default: true,
+        thinking: { levels: [{ value: "low", label: "Low" }, { value: "high", label: "High" }], default: "high" },
+      },
+      {
+        id: "m2", label: "Model Two", provider: "p1",
+        thinking: { levels: [{ value: "low", label: "Low" }, { value: "high", label: "High" }], default: "high" },
+      },
+    ]);
+  } finally {
+    if (originalBin === undefined) delete process.env.OPEN_TAG_DSH_BIN;
+    else process.env.OPEN_TAG_DSH_BIN = originalBin;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
