@@ -3,13 +3,24 @@
 - 日期：2026-09-19
 - 状态：待评审
 - 范围：两个仓库、两个交付物（open-tag 新 runtime + dsh-work 新插件）
-- 关联：`docs/tech-debt-tracker.md` I39（ACP probe / 模型发现）、`.agents/notes/2026-09-19-dsh-requirement-system-prompt-file.md`（早期需求草稿，本文取代其技术方案部分）
+- 关联：`docs/tech-debt-tracker.md` I39（ACP probe / 模型发现）
+- 取代早前需求草稿的技术方案部分；其仍具约束力的产品需求已内联至 §1.1
 
 ## 1. 背景与目标
 
 open-tag 的 agent runtime 面向多 harness（claude/codex/copilot/kimi/opencode/pi/cursor/hermes/reasonix 共 9 个）。目标：新增第 10 个 runtime —— DeepSeek Harness（`dsh`），使 open-tag daemon 能像驱动 claude 一样驱动 dsh agent：持久 teammate、wake/sleep 生命周期、跨重启 resume、模型/effort 可选、轨迹流回 UI。
 
 **硬约束：不改 deepseek-harness 源码**（git submodule 隔离）。dsh 侧一切能力以 out-of-tree 插件交付。
+
+### 1.1 产品需求基线（自早期需求草稿内联，仍然约束本设计）
+
+- P1 客户端（open-tag）生成人设文本，dsh 侧对内容零知识
+- P2 会话周期内人设稳定；每次 wake 重新 spawn 时可换新（open-tag 生命周期天然满足）
+- P3 人设经**协议调用参数**在连接建立后注入，不落盘、不进 env
+- P4 人设来源无效（空文本、未注入）→ 显式失败，禁止静默回退默认人设
+- P5 能力可发现：open-tag 探测 `dsh` CLI + `opentag` profile 存在
+- P6 同进程多 session 共用一份人设（当前单 agent 单 session，天然满足）
+- 不改变 dsh 人类用户入口行为；不用本能力时插件行为无副作用
 
 ## 2. 关键决策（含已否决方案）
 
@@ -60,13 +71,15 @@ plugins/dsh-opentag-agent-runtime/
 | 方法 | 参数 | 行为 |
 |---|---|---|
 | `opentag/auth` | `{token: string}` | 校验 token（constant-time）→ 标记 authorized；失败则后续 `opentag/*` 全拒 |
-| `opentag/setSystemPrompt` | `{text: string}` | 必须已 authorized；text 非空；**每进程仅一次**，二次调用报错；存储后注册 `ctx.systemPrompt.section({name:"opentag-standing-prompt", complete:true, interpolate:false, text})` |
+| `opentag/setSystemPrompt` | `{text: string}` | 必须已 authorized；text 非空；**每进程仅一次**，二次调用报错；存储文本供哨兵变量解析 |
 
-**门禁（fail-loud，不依赖拦截 ACP 分发）**：启动即注册 complete section，其 text 引用未解析变量 `{{opentag_standing_prompt}}`；`setSystemPrompt` 前该变量解析器抛错 → dsh-system-prompt 官方语义"unresolved variables fail assembly" → 任何 `session/new` 尝试立即失败并给出明确错误。注入后变量解析为存储文本。
+**门禁（fail-loud，不依赖拦截 ACP 分发；唯一主机制）**：插件启动时注册**唯一** complete section —— `ctx.systemPrompt.section({name:"opentag-standing-prompt", complete:true, text:"{{opentag_standing_prompt}}"})` —— 并注册同名变量解析器：未注入时返回 `undefined`（触发 dsh-system-prompt 官方"unresolved variables fail assembly"语义，任何 `session/new` 立即失败并带明确错误）；注入后解析为存储文本。注意 section 名重复注册会抛错（上游源码语义），故不存在"二次注册字面 section"路径；`interpolate:false` 字面注册仅作为单遍插值假设破产时的回退（见 §8）。
 
 **token 传递**：daemon spawn 时 argv `--opentag-auth-token <hex32>`（app 参数，经 dsh-cmdline 共享快照解析）；daemon 同步生成同值用于握手。
 
-**权限**：派生 server 内置 permission 自动 allow-first（与 open-tag 其它 runtime 的 bypass 立场一致）。
+**权限**：派生 server 保持上游行为 —— `session/request_permission` 正常发给客户端，由 **open-tag runtime 侧自动选第一个 allow 选项**应答（归属层唯一，避免双侧都做留死代码；与其它 runtime 的 bypass 立场一致）。
+
+**版权**：派生 `acp-server.ts` 文件头保留上游 MIT 版权与来源声明，插件随包携带 LICENSE 与归属说明（对齐 dsh-work 仓库 `THIRD_PARTY_NOTICES.md` 惯例）。
 
 ### 3.2 open-tag 侧：`src/daemon/dshRuntime.ts`
 
@@ -118,14 +131,15 @@ idle 10min → kill ──▶ 消息到达 → agentManager.start()
 
 - **dsh-work**：插件包 + README（profile 建立两条命令：`dsh --profile opentag --from-default-profile acp`、`dsh plugin --profile opentag add <plugin-path>`；构建 `node build.mjs`；dsh submodule 需 `build:lib:host`）。首次部署后手工 smoke：initialize+auth+setSystemPrompt+session/new。
 - **open-tag**：无需新 env；daemon 发版纪律照常 —— `src/daemon/**` 进 bundle → bump `packages/daemon/package.json` + GitHub Release + CHANGELOG 条目（**merged ≠ shipped**）。
-- 文档同步（同 commit）：ARCHITECTURE.md codemap、FEATURES.md checkbox、README Verified（E2E 证据）、tech-debt-tracker（I39 dsh 部分销账 / 记录派生 server 维护债）。
+- 文档同步（同 commit）：ARCHITECTURE.md codemap、FEATURES.md checkbox、README Verified（E2E 证据）、tech-debt-tracker（dsh 经 config-options 动态发现模型，**不新增 I39 类静态列表债务**；新增一条记录派生 server 的上游漂移维护债）。
 
 ## 7. 测试策略（TDD，两侧先写测试）
 
 **插件（vitest）**：
 - auth：token 匹配/不匹配/未设置 argv、constant-time、authorized 状态迁移
-- setSystemPrompt：空 text、未 auth、二次调用、成功后 section 注册参数（complete/interpolate/name）
-- 哨兵：注入前变量解析抛错（assembly fail）、注入后返回文本、文本含 `{{…}}` 不被二次插值（单遍插值假设以测试钉死）
+- setSystemPrompt：空 text、未 auth、二次调用、成功后哨兵变量解析返回存储文本
+- 哨兵：注入前变量解析返回 undefined（assembly fail）、注入后返回文本、文本含 `{{…}}` 不被二次插值（单遍插值假设以测试钉死）、section 重复注册路径不存在（唯一 section 启动注册一次）
+- resume：持久化 cwd 与请求 cwd 不一致时拒绝（上游 `sameDirectory` 校验）—— open-tag cwd 跨 wake 稳定，测试显式钉住防未来回归
 - patch：`--dump-config` 断言 system-prompt config 覆盖生效、acp 原插件不挂载
 - 派生 server：opentag/* 门禁矩阵 + 标准 ACP 方法回归（沿用 dsh-acp 测试思路，mock transport `config.stream`）
 
