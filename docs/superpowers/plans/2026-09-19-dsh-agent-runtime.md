@@ -398,14 +398,26 @@ export function handleOpentagCall(
 
   1. **导入**：加 `import { handleOpentagCall } from './policy.ts'`、`import { createAuthGate } from './auth.ts'`、`import { createPromptGate } from './prompt-gate.ts'`、`import type { OpentagState } from './policy.ts'`
   2. **inject**：`['agents', 'llm', 'sessionPersistence', 'sessions']` → 追加 `'cmdlineArgs'` 与 `'opentagAppStartup'`（后者等 app 半体 publish 后才 claim stdio，对齐上游 acp 行 `inject: [acpAppStartup]` 的接线方式 —— 拷 `packages/bundle/acp-app/cordis.patch.yml` 里 acp 行的 `inject` 写法）
-  3. **apply() 开头**建 state，token 从 cmdlineArgs 快照读（app 半体定义了 `--opentag-auth-token` option，其 opts 出现在共享快照；**不用 config 模板传 service 值** —— bundle config 是静态 YAML，加载期求值拿不到运行期 service，评审已预判此路不通）：
+  3. **apply() 开头**建 state，token 从 cmdlineArgs 快照读 —— **注意：快照是冻结的原始 argv 字符串数组**（`provideCmdline` 契约），不是 commander 解析后的 opts；commander 的解析值是 action 局部变量、用后即弃。因此需要一个新的 pure helper（TDD，放 `src/argv.ts`）：
      ```ts
-     const authToken = (ctx.cmdlineArgs as { opentagAuthToken?: string } | undefined)?.opentagAuthToken ?? null
+     // src/argv.ts — scan frozen raw argv for the auth token in BOTH spellings.
+     export function parseAuthTokenArgv(argv: readonly string[]): string | null {
+       for (let i = 0; i < argv.length; i++) {
+         const a = argv[i]!;
+         if (a === "--opentag-auth-token") return argv[i + 1] ?? null;      // 空格形式
+         if (a.startsWith("--opentag-auth-token=")) return a.slice("--opentag-auth-token=".length) || null; // = 形式
+       }
+       return null;
+     }
+     ```
+     测试（tests/argv.test.ts）：空格形式、`=` 形式、缺失 → null、flag 在末尾无值 → null、空值 → null。B2 接线：
+     ```ts
+     const authToken = parseAuthTokenArgv(ctx.cmdlineArgs)
      const authGate = createAuthGate(authToken)
      const promptGate = createPromptGate()
      const opentag: OpentagState = { auth: authGate, prompt: promptGate }
      ```
-     cmdlineArgs 快照字段名以 `@deepseek-ai/dsh-cmdline` 现源码为准核对（camelCase 转换与否）。
+     （app 半体的 requiredOption 保证缺失时响亮失败，此处 null 兜底仅防御性）。
   4. **哨兵注册**（apply 内，服务可用后）：
      ```ts
      ctx.systemPrompt.section({
