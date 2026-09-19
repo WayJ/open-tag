@@ -245,7 +245,8 @@ The core collaboration loop is working end to end with Claude Code and Codex: ag
 > via the UI (runtime picker shows DeepSeek Harness; the model dropdown live-probed 16 models via ACP
 > `configOptions`); @mention → agent wake → a real LLM turn (glm-5.3) → reply landed in the channel —
 > two-way confirmed twice; the activity trajectory (thinking → working → online) rendered; cross-restart
-> session resume confirmed (daemon restart, `agent started resume:true`). Unit suites green (56+ files);
+> session resume confirmed (daemon restart, `agent started resume:true`). dsh suites: 56 tests
+> (55 pass, 1 platform-conditional skip);
 > fake-dsh integration tests cover handshake, auth failure, serial delivery, tool dedup, permission
 > answering, and stop ordering. Evidence log: `.agents/notes/2026-09-19-dsh-runtime-e2e.md`.
 

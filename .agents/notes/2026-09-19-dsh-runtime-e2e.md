@@ -12,7 +12,7 @@
 - **Activity 轨迹渲染**：thinking → working → online 全程在 UI 呈现。
 - **跨重启会话恢复**：重启 daemon 后再次唤醒，日志出现
   `agent started resume:true`，会话延续。
-- **单元测试**：56+ 测试文件全绿（含 dshRuntime 纯函数/集成、listModels-dsh 探测）。
+- **单元测试**：dsh 套件 56 用例（55 通过，1 个平台条件性跳过；含 dshRuntime 纯函数/集成、listModels-dsh 探测）。
 - **fake-dsh 集成测试覆盖**：握手、鉴权失败、串行投递、tool 去重、permission
   应答、stop 时序。
 
