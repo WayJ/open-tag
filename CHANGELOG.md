@@ -31,6 +31,14 @@ from `main`; see commit history for fine-grained server/web changes.
   the full snapshot moves on demand via the `memory:get` / `memory:data` RPC — the first
   daemon-initiated RPC (an old server silently drops it; the daemon's timeout fallback treats
   the restore as "no server row").
+- **dsh dynamic model discovery**: the `probe-models` handler now drives the dsh runtime's
+  ACP handshake (`initialize → authenticate → opentag/auth → opentag/setSystemPrompt →
+  session/new → session/close`) in a throwaway probe process (`dsh`, or `OPEN_TAG_DSH_BIN`)
+  and parses the session/new `configOptions` into the model list (provider-grouped `model`
+  select + session-level `reasoning_effort` thinking levels). The probe needs longer than
+  the one-shot runtimes, so the budgets are paired: daemon `LIST_BUDGET_MS.dsh` 25s under
+  server `PROBE_BUDGET_MS.dsh` 30s — the dsh dropdown stays empty if either side silently
+  falls back to the 7s/8s defaults. `src/daemon/listModels.ts` + `src/server/runtimeModels.ts`.
 
 ### Fixed
 
