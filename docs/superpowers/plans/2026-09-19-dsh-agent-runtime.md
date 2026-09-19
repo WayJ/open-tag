@@ -443,6 +443,8 @@ export function handleOpentagCall(
      })
      ```
      `as never` 视 SDK 类型而定 —— 若 `onRequest` 强类型枚举 method，用 SDK 提供的自定义 method 注册路径；实现时以 `node_modules/@agentclientprotocol/sdk` 的 .d.ts 现签名核对。错误码用上游既有 `internalError` helper（invalidParams 更贴切则用之）。
+
+    **B2 实施结论（已验证，后续任务据此）**：SDK 存在公开自定义方法重载 `onRequest<Params,Response>(method: string, params: ParamsParser<Params>, handler)`（acp.d.ts:660），风险闸口 1 解除。实际错误码：auth 失败 → `authRequired`(-32000)、setSystemPrompt 拒绝 → `invalidParams`(-32602)、未知方法 → -32601，policy 错误消息原样透传。**C3/D 侧客户端按"错误存在 + 消息前缀 opentag:"判失败，不硬编码 -32603。** 插件 `export const name` 保持 `'acp'`（cordis patch 行 id 约定 = 插件名；B3 以行 id + 不同包名替换上游行）。inject 实际为 `['agents','llm','sessionPersistence','sessions','cmdlineArgs','opentagAppStartup','systemPrompt']`（systemPrompt 为哨兵注册所需，已加 peerDep）。
   6. **`session/new` 门禁报错文案**：上游在 prompt assembly 失败时会以 dsh-system-prompt 的错误冒泡；验证错误信息可辨识（含 `opentag_standing_prompt` 变量名即可）。若上游把 assembly 错误吞成 generic internal error，在 `newSession` 入口加前置检查：`if (!promptGate.isSet()) throw invalidParams('open-tag persona not injected: call opentag/setSystemPrompt before session/new')`（这是确定性更强的显式门禁，保留哨兵作为第二道防线）。
   7. 其余逻辑（session/prompt/update/permission/resume/close/persistence）**零改动**。
 
