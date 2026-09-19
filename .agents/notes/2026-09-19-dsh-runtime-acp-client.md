@@ -90,3 +90,24 @@ onExit 再删；二次 stop 会多排一个 killTree（同步 taskkill 阻塞后
 
 修复后：dshRuntime.test.ts **25 pass**（24+1）；codex/claude/listModels-dsh 回归 23 pass；
 `npx tsc --noEmit` 通过。
+
+## I-2 修复（E2E 暴露：admission 在轮末结算 → 3min 启动超时杀掉健康会话）
+
+E2E 实况：glm-5.3 high effort 的真实 agentic 首轮 >180s，而初始 admission 原设计在
+session/prompt **响应**（= 轮末）才 settle → agentManager START_ADMISSION_TIMEOUT_MS
+(3min) 到期杀掉正在工作的会话 → 重启循环（transcript 已 99KB 真实活动）。
+
+修复：通知处理器在通过 current-session 过滤、排除 config_option_update 后调用
+`admission.accept()`——**首个 turn 活动 = 初始 prompt 已被接受并处理中**，与 claude
+（stdin 写 ACK）/ codex（turn/start accepted）语义对齐。exactly-once 守卫使后续 update
+成为 no-op；响应路径、握手失败、进程退出仍各为兜底结算（无 update 的轮次照常在响应时
+settle）。per-delivery 的 protocolAdmission 不变（仍在轮末，投递语义未动）。
+
+测试（先红后绿）：新用例 FAKE_DSH_ADMIT_GATE——假 dsh 先发 agent_message_chunk、再卡在
+release 文件上不答 prompt；断言 admission（无错）在 prompt 响应**存在之前**已 settle、
+同一条 update 照常喂 onTrajectory、放行后轮末仍到 online。红 = 5s 超时。
+连带加固三个原有用例的等待条件（断言不变）：happy/tooldup/perm 原本借"admission=轮末"
+隐式等全轮完成，早结算后改为显式 waitFor 终态（online / hello / permission_reply）。
+
+修复后：dshRuntime.test.ts 32 tests / 31 pass / 1 D3 条件跳过（本机装有真 dsh）/ 0 fail；
+codex/claude/listModels-dsh 回归 23 pass；`npx tsc --noEmit` 通过。

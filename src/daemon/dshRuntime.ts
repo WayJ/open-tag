@@ -261,6 +261,13 @@ export const dshRuntime: Runtime = {
         absorbConfigOptions(update); // catalog/selection changed server-side — keep resolution fresh
         return;
       }
+      // First evidence the initial prompt is being processed settles the initial admission here —
+      // same semantics as claude (stdin write ACK) / codex (turn/start accepted). The prompt
+      // response only arrives at turn END, and a real agentic first turn can outlive
+      // agentManager's 3min START_ADMISSION_TIMEOUT, which restart-looped healthy sessions.
+      // Exactly-once guard makes later updates no-ops; response/handshake-error/exit still settle
+      // it when no update ever arrives.
+      admission.accept();
       const entries = mapAcpUpdate(update);
       // ACP re-emits tool_call per status change (pending → in_progress → completed). Only the
       // first occurrence per toolCallId is trajectory-worthy; later ones feed onActivity only.

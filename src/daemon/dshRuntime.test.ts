@@ -323,6 +323,13 @@ function writeFakeDsh(root: string): void {
     "    ] } });",
     "    return;",
     "  }",
+    "  if (process.env.FAKE_DSH_ADMIT_GATE) {",
+    '    waitFlag("release-admit", () => {',
+    '      fs.writeFileSync(path.join(process.cwd(), "turn1-responded"), "1");',
+    '      ok(id, { stopReason: "end_turn" });',
+    "    });",
+    "    return;",
+    "  }",
     '  ok(id, { stopReason: "end_turn" });',
     "};",
     'const rl = readline.createInterface({ input: process.stdin });',
@@ -460,6 +467,8 @@ test("dsh handshake completes: session id, initial prompt, trajectory, activity"
 
     assert.ok(run.trajectory.some((e) => e.kind === "text" && e.text === "hello"));
     assert.ok(run.activities.some((e) => e.activity === "thinking"));
+    // admission now settles on the first update (mid-turn) — wait for the turn to actually end
+    await waitFor(() => run!.activities.at(-1)?.activity === "online");
     assert.equal(run.activities.at(-1)?.activity, "online");
   } finally {
     await cleanup(run, root);
@@ -520,6 +529,9 @@ test("tool_call re-emissions map to one trajectory entry but keep feeding activi
   try {
     run = startFake(root, {}, { FAKE_DSH_TOOLS: "1" });
     await waitFor(() => run!.admissions.length > 0);
+    // admission settles on the FIRST update (tool_call pending) — the rest of the burst
+    // (in_progress + message chunk) lands moments later; wait for the burst to complete.
+    await waitFor(() => run!.trajectory.some((e) => e.kind === "text" && e.text === "hello"));
     const toolEntries = run.trajectory.filter((e) => e.kind === "tool");
     assert.equal(toolEntries.length, 1, "pending + in_progress for the same toolCallId → ONE trajectory entry");
     assert.equal(toolEntries[0]?.toolName, "Read file");
@@ -537,9 +549,13 @@ test("session/request_permission is answered with the first allow option", async
   try {
     run = startFake(root, {}, { FAKE_DSH_PERM: "1" });
     await waitFor(() => run!.admissions.length > 0);
-    assert.equal(run.admissions[0], undefined, "the turn completes after the permission is answered");
+    assert.equal(run.admissions[0], undefined);
+    // admission settles on the first update — the permission request + reply follow; wait for them
+    await waitFor(() => request(root, "permission_reply").length > 0);
     const reply = request(root, "permission_reply")[0]?.params;
     assert.deepEqual(reply?.result?.outcome, { outcome: "selected", optionId: "allow_once" });
+    await waitFor(() => run!.activities.at(-1)?.activity === "online");
+    assert.equal(run.activities.at(-1)?.activity, "online", "the turn completes after the permission is answered");
   } finally {
     await cleanup(run, root);
   }
@@ -638,6 +654,32 @@ test("stop() during handshake sends no cancel/close, kills the process, and reje
     assert.match(run.admissions[0]!.message, /dsh exited/);
     assert.equal(run.activities.some((e) => e.activity === "offline"), false, "intentional stop stays quiet — no offline noise");
     // completing without an unhandled stdin 'error' is itself the no-crash assertion
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("initial admission settles on the first turn activity, not the prompt response", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-admit-"));
+  let run: FakeRun | undefined;
+  try {
+    // The fake emits its session/update and then BLOCKS on a release file before answering
+    // session/prompt — a first turn that is genuinely being processed but runs long. Initial
+    // admission must already be settled by the update alone (claude settles on the stdin write
+    // ACK, codex on turn/start accepted; waiting for turn END trips agentManager's 3min
+    // START_ADMISSION_TIMEOUT and restart-loops healthy sessions).
+    run = startFake(root, {}, { FAKE_DSH_ADMIT_GATE: "1" });
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(run.admissions[0], undefined, "accepted on first evidence the turn is being processed");
+    assert.equal(
+      existsSync(path.join(root, "turn1-responded")),
+      false,
+      "admission settled BEFORE any session/prompt response existed",
+    );
+    assert.ok(run.trajectory.some((e) => e.kind === "text" && e.text === "hello"), "the same update still feeds onTrajectory");
+    writeFileSync(path.join(root, "release-admit"), "go");
+    await waitFor(() => existsSync(path.join(root, "turn1-responded")));
+    await waitFor(() => run!.activities.at(-1)?.activity === "online");
   } finally {
     await cleanup(run, root);
   }
