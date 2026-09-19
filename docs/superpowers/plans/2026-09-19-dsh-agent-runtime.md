@@ -289,7 +289,7 @@ export function createPromptGate(): PromptGate {
 ```ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkOpentagCall } from "../src/policy.ts";
+import { handleOpentagCall } from "../src/policy.ts";
 import { createAuthGate } from "../src/auth.ts";
 import { createPromptGate } from "../src/prompt-gate.ts";
 
@@ -297,33 +297,33 @@ const make = () => ({ auth: createAuthGate("t".repeat(64)), prompt: createPrompt
 
 test("non-opentag methods are not governed", () => {
   const s = make();
-  assert.equal(checkOpentagCall(s, "session/new"), false); // caller: handled by ACP layer
+  assert.equal(handleOpentagCall(s, "session/new"), false); // caller: handled by ACP layer
 });
 
 test("opentag/* requires auth first", () => {
   const s = make();
-  const r = checkOpentagCall(s, "opentag/setSystemPrompt");
+  const r = handleOpentagCall(s, "opentag/setSystemPrompt");
   assert.ok(r instanceof Error && /auth/i.test(r.message));
 });
 
 test("opentag/auth passes token through gate", () => {
   const s = make();
-  const r = checkOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
+  const r = handleOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
   assert.equal(r, null);
   assert.equal(s.auth.isAuthorized(), true);
 });
 
 test("setSystemPrompt after auth stores; double set errors", () => {
   const s = make();
-  checkOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
-  assert.equal(checkOpentagCall(s, "opentag/setSystemPrompt", { text: "p" }), null);
-  assert.ok(checkOpentagCall(s, "opentag/setSystemPrompt", { text: "p2" }) instanceof Error);
+  handleOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
+  assert.equal(handleOpentagCall(s, "opentag/setSystemPrompt", { text: "p" }), null);
+  assert.ok(handleOpentagCall(s, "opentag/setSystemPrompt", { text: "p2" }) instanceof Error);
 });
 
 test("unknown opentag method errors", () => {
   const s = make();
-  checkOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
-  assert.ok(checkOpentagCall(s, "opentag/nope") instanceof Error);
+  handleOpentagCall(s, "opentag/auth", { token: "t".repeat(64) });
+  assert.ok(handleOpentagCall(s, "opentag/nope") instanceof Error);
 });
 ```
 
@@ -341,7 +341,7 @@ export interface OpentagState {
   prompt: PromptGate;
 }
 
-export function checkOpentagCall(
+export function handleOpentagCall(
   state: OpentagState,
   method: string,
   params?: { token?: string; text?: string },
@@ -396,7 +396,7 @@ export function checkOpentagCall(
 - [ ] **Step 0:** 全目录 fork（`ls` 清单核对拷全 + grep 无 `.js` 后缀残留 + `npx tsc --noEmit` 通过零语义改动基线；此时尚未加 opentag 逻辑）。
 - [ ] **Step 1:** 在 `src/index.ts` 做且仅做以下修改（每条一个 commit-able 小步）：
 
-  1. **导入**：加 `import { checkOpentagCall } from './policy.ts'`、`import { createAuthGate } from './auth.ts'`、`import { createPromptGate } from './prompt-gate.ts'`、`import type { OpentagState } from './policy.ts'`
+  1. **导入**：加 `import { handleOpentagCall } from './policy.ts'`、`import { createAuthGate } from './auth.ts'`、`import { createPromptGate } from './prompt-gate.ts'`、`import type { OpentagState } from './policy.ts'`
   2. **inject**：`['agents', 'llm', 'sessionPersistence', 'sessions']` → 追加 `'cmdlineArgs'` 与 `'opentagAppStartup'`（后者等 app 半体 publish 后才 claim stdio，对齐上游 acp 行 `inject: [acpAppStartup]` 的接线方式 —— 拷 `packages/bundle/acp-app/cordis.patch.yml` 里 acp 行的 `inject` 写法）
   3. **apply() 开头**建 state，token 从 cmdlineArgs 快照读（app 半体定义了 `--opentag-auth-token` option，其 opts 出现在共享快照；**不用 config 模板传 service 值** —— bundle config 是静态 YAML，加载期求值拿不到运行期 service，评审已预判此路不通）：
      ```ts
@@ -420,12 +420,12 @@ export function checkOpentagCall(
   5. **JSON-RPC 方法挂载**（在 `createAcpAgentApp(...)` 链上追加）：
      ```ts
      .onRequest('opentag/auth' as never, async ({ params }: { params: { token?: string } }) => {
-       const verdict = checkOpentagCall(opentag, 'opentag/auth', params)
+       const verdict = handleOpentagCall(opentag, 'opentag/auth', params)
        if (verdict instanceof Error) throw internalError(verdict.message)
        return {}
      })
      .onRequest('opentag/setSystemPrompt' as never, async ({ params }: { params: { text?: string } }) => {
-       const verdict = checkOpentagCall(opentag, 'opentag/setSystemPrompt', params)
+       const verdict = handleOpentagCall(opentag, 'opentag/setSystemPrompt', params)
        if (verdict instanceof Error) throw internalError(verdict.message)
        return {}
      })
