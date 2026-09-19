@@ -68,3 +68,25 @@ onExit 再删；二次 stop 会多排一个 killTree（同步 taskkill 阻塞后
 - `npx tsc --noEmit` 根通过。
 - 未做（fail loud）：真机 dsh 冒烟/E2E 属 E2（dev:e2e:up）；runtimes.ts 注册属 D3；
   ARCHITECTURE codemap/CHANGELOG 0.17.0 属 E3（D1/D4 先例亦未在各自任务加 codemap 行）。
+
+## 评审修复（后续 commit：fix: dsh runtime review fixes）
+
+- **I-1**：DshClient 构造器挂 `proc.stdin?.on("error", () => {})`——write 守卫与 OS 落盘
+  之间子进程死掉产生的异步 EPIPE 无其它监听者，daemon 无 uncaughtException 处理器，
+  一个未处理 'error' 事件会带走所有 agent。
+- **M-1**：stop() 顶部 `if (stopped) return;` 幂等；exit 处理器 clearTimeout(killTimer)——
+  优雅退出后不再对死 PID 跑同步 taskkill（顺带消除 PID 复用误杀窗口）。
+- **M-2**：offline detail 可诊断化——init 失败带 error message（clip 200）；exit 路径
+  `dsh exited (N): <stderr 尾巴>`（stderr 保留最近 3 行 ×200 字符环，join 后取尾 200）。
+  有意 stop（stopped）不发声；进程死亡时 offline 归 exit 处理器独占（握手 catch 在
+  `spawnFailed || reportedExit` 时只 settle，不重复报告）。
+- **M-5**：删掉 session/new 里恒真的 `sessionId !== r.sessionId` 分支（clear() 空集合误导
+  读者），直接赋值。
+- **M-4 首项**：新测试"stop() 于握手期间"——FAKE_DSH_HANG 吞掉 initialize；断言无
+  cancel/close、无 session/new、exit 走 EOF+kill、admission 以 /dsh exited/ 拒绝、无
+  offline 噪声、无崩溃。
+- 不修（按评审裁定）：M-3 UTF-8 分块边界（codex/claude 同样存在，进 tech-debt）；
+  I-2 admission-at-turn-end（计划本意，E2 验证项）。
+
+修复后：dshRuntime.test.ts **25 pass**（24+1）；codex/claude/listModels-dsh 回归 23 pass；
+`npx tsc --noEmit` 通过。

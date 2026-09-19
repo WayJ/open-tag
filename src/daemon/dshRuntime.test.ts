@@ -335,6 +335,7 @@ function writeFakeDsh(root: string): void {
     "  }",
     "  record(line);",
     "  if (msg.id === undefined) return; // client notification (session/cancel) — recorded only",
+    '  if (process.env.FAKE_DSH_HANG && msg.method === "initialize") return; // swallow: handshake never completes',
     "  const p = msg.params ?? {};",
     '  if (msg.method === "initialize") {',
     "    const authMethods = process.env.FAKE_DSH_AUTH_ID ? [{ id: process.env.FAKE_DSH_AUTH_ID, description: \"\" }] : [];",
@@ -614,6 +615,27 @@ test("stop() sends session/cancel then session/close and the process exits", asy
     assert.ok(cancelAt < closeAt, "cancel precedes close");
     const close = request(root, "session/close")[0];
     assert.equal(close?.params?.sessionId, "s1");
+  } finally {
+    await cleanup(run, root);
+  }
+});
+
+test("stop() during handshake sends no cancel/close, kills the process, and rejects admission", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-stopmid-"));
+  let run: FakeRun | undefined;
+  try {
+    run = startFake(root, {}, { FAKE_DSH_HANG: "1" }); // initialize is swallowed — handshake never completes
+    await waitFor(() => request(root, "initialize").length > 0);
+    run.session.stop();
+    await waitFor(() => run!.exitCodes.length > 0);
+    await waitFor(() => run!.admissions.length > 0);
+    assert.equal(request(root, "session/cancel").length, 0, "no session exists yet — nothing to cancel");
+    assert.equal(request(root, "session/close").length, 0);
+    assert.equal(request(root, "session/new").length, 0, "handshake never got past initialize");
+    assert.ok(run.admissions[0] instanceof Error, "the dead runtime must reject the initial admission");
+    assert.match(run.admissions[0]!.message, /dsh exited/);
+    assert.equal(run.activities.some((e) => e.activity === "offline"), false, "intentional stop stays quiet — no offline noise");
+    // completing without an unhandled stdin 'error' is itself the no-crash assertion
   } finally {
     await cleanup(run, root);
   }

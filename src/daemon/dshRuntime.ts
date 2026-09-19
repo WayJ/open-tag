@@ -143,6 +143,9 @@ class DshClient {
       this.buf += c.toString(); const lines = this.buf.split("\n"); this.buf = lines.pop() ?? "";
       for (const ln of lines) { const t = ln.trim(); if (t) this.handleLine(t); }
     });
+    // Sink async EPIPE from a child that died between the write guard and the OS: the daemon has
+    // no uncaughtException handler, so a single unhandled stdin 'error' event kills every agent.
+    proc.stdin?.on("error", () => {});
   }
 
   request(method: string, params: unknown): Promise<any> {
@@ -201,9 +204,11 @@ export const dshRuntime: Runtime = {
     let lastSentModel: string | null = null;
     let lastSentEffort: string | null = null;
     const seenToolCalls = new Set<string>();
+    const stderrTail: string[] = []; // last few stderr lines — crash diagnostics for the offline detail
     let spawnFailed = false;
     let reportedExit = false;
     let stopped = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     // Deliveries await this gate: it resolves once the ACP handshake + session are ready and
     // rejects on any handshake/spawn failure (each queued deliver then rejects with the cause).
     let settleReady!: (error?: Error) => void;
@@ -304,7 +309,7 @@ export const dshRuntime: Runtime = {
         } else {
           const r = await client.request("session/new", { cwd: opts.cwd, mcpServers: [] });
           if (typeof r?.sessionId !== "string" || !r.sessionId) throw new Error("dsh session/new returned no sessionId");
-          if (sessionId !== r.sessionId) { sessionId = r.sessionId; seenToolCalls.clear(); }
+          sessionId = r.sessionId;
           absorbConfigOptions(r);
         }
         cb.onSession(sessionId);
@@ -315,14 +320,22 @@ export const dshRuntime: Runtime = {
         const error = e instanceof Error ? e : new Error(String(e));
         settleReady(error);
         admission.reject(error);
-        if (spawnFailed) return;
+        // A dead/stopped process rejects every in-flight handshake request via closeAllPending;
+        // its own handler already owned the reporting (offline detail + onExit) — don't double up.
+        if (spawnFailed || reportedExit) return;
         cb.log.error("dsh init failed", { detail: error.message });
-        cb.onActivity("offline", "dsh init failed");
+        cb.onActivity("offline", `dsh init failed: ${error.message.slice(0, 200)}`);
         killTree(proc); // fail loud: exit handler finishes cleanup (closeAllPending + onExit)
       }
     })();
 
-    proc.stderr?.on("data", (c: Buffer) => { const t = c.toString().trim(); if (t) cb.log.debug("dsh stderr", { t: t.slice(0, 300) }); });
+    proc.stderr?.on("data", (c: Buffer) => {
+      const t = c.toString().trim();
+      if (!t) return;
+      stderrTail.push(t.slice(0, 200));
+      if (stderrTail.length > 3) stderrTail.shift();
+      cb.log.debug("dsh stderr", { t: t.slice(0, 300) });
+    });
     proc.on("error", (e: NodeJS.ErrnoException) => {
       admission.reject(e);
       spawnFailed = true;
@@ -335,10 +348,14 @@ export const dshRuntime: Runtime = {
       finish(1);
     });
     proc.on("exit", (code) => {
-      const error = new Error(`dsh exited (${code ?? "signal"})`);
+      if (killTimer) { clearTimeout(killTimer); killTimer = undefined; } // already dead — no pointless taskkill (or PID-reuse misfire)
+      const tail = stderrTail.join(" | ").slice(-200);
+      const detail = `dsh exited (${code ?? "signal"})${tail ? `: ${tail}` : ""}`;
+      const error = new Error(detail);
       settleReady(error);
       admission.reject(error);
       client.closeAllPending(error); // rejects any in-flight prompt → its deliver rejects
+      if (!stopped) cb.onActivity("offline", detail); // a crash's stderr is the only clue; intentional stops stay quiet
       finish(code);
     });
 
@@ -349,6 +366,7 @@ export const dshRuntime: Runtime = {
         // Graceful teardown: cancel + close (unawaited, best-effort), then EOF — dsh persists the
         // session on clean stdin close, which is what makes the next wake resumable. killTree
         // after a short grace backs up a hung server.
+        if (stopped) return; // idempotent: a second call would only re-arm killTree's taskkill
         stopped = true;
         try {
           if (sessionId) {
@@ -357,7 +375,7 @@ export const dshRuntime: Runtime = {
           }
           if (proc.stdin && !proc.stdin.writableEnded) proc.stdin.end();
         } catch { /* best effort */ }
-        const killTimer = setTimeout(() => killTree(proc), 1_000);
+        killTimer = setTimeout(() => killTree(proc), 1_000);
         killTimer.unref?.();
       },
     };
