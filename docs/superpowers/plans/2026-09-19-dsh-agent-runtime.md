@@ -381,7 +381,7 @@ export function checkOpentagCall(
   3. service 常量改并导出 `OPENTAG_APP_STARTUP_SERVICE = 'opentagAppStartup'`
   4. command 改名 `dsh --profile opentag`，description 改 open-tag 专用描述
   5. command 增加必选 option：`.requiredOption('--opentag-auth-token <hex>', 'per-spawn token the daemon must echo via opentag/auth')`
-  6. action 内 `exitOnStdinEnd(ctx, 'opentag-app.stdin')` + `ctx.provide(OPENTAG_APP_STARTUP_SERVICE, { accepted: true, authToken: program.opts().opentagAuthToken })` —— token 经 service 传给 server 半体（避免双读 cmdline）
+  6. action 内 `exitOnStdinEnd(ctx, 'opentag-app.stdin')` + `ctx.provide(OPENTAG_APP_STARTUP_SERVICE, { accepted: true })` —— service 仅承担 stdio claim 顺序依赖；**token 权威路径是 server 半体读 cmdlineArgs 共享快照**（B2 修改点 3），此处不重复携带
 
 - [ ] **Step 2:** typecheck（需 submodule 已 build：见 C1；若未 build 先跳过 typecheck，C1 后回补）：`npx tsc --noEmit`（DW 插件目录）。
 - [ ] **Step 3:** 提交 `feat: app startup half with auth-token option`。
@@ -389,11 +389,11 @@ export function checkOpentagCall(
 ### Task B2: 派生 ACP server（核心任务）
 
 **Files (DW):**
-- Create: `src/index.ts`、`src/content.ts`、`src/mcp.ts`、`src/model-control.ts`、`src/session.ts`、`src/codec.ts`（视上游 src 现有文件全量）
+- Create: `src/` 下对上游 `packages/acp/acp/src/` 的**全量镜像**（以 `ls` 实际清单为准 —— 评审核对为 7 个：index/content/mcp/model-control/session/codec/updates，勿手工挑文件）
 
-**Fork 范围（评审 Issue 1 修正）：上游 `packages/acp/acp/src/index.ts` 不是自包含文件** —— 它 import 同包 `./content.ts`、`./mcp.ts`、`./model-control.ts`、`./session.ts`（session.ts 再引 dsh-agent/dsh-llm/dsh-session 等），且发布包 `files` 只含 `lib/index.js` 单文件 bundle —— 从 `@deepseek-ai/dsh-acp` 包 import 内部模块不可行。因此派生 = **整目录 fork**：把上游 `packages/acp/acp/src/` 全部 `.ts` 原样拷进本插件 `src/`，相对导入 `./xxx.js` 后缀按本插件 tsconfig（`allowImportingTsExtensions`、Bundler 解析）统一改为 `./xxx.ts`，包导入（`@deepseek-ai/*`、`@agentclientprotocol/sdk`）保持不动。这是 spec §8"派生范围最小化"的修订：fork 面是整个 acp src（~5 文件），修改面仍只有 index.ts 的下列各点。
+**Fork 范围（评审 Issue 1 修正）：上游 `packages/acp/acp/src/index.ts` 不是自包含文件** —— 它 import 同包 `./content.ts`、`./mcp.ts`、`./model-control.ts`、`./session.ts`（session.ts 再引 `./codec.ts`、`./updates.ts` 及 dsh-agent/dsh-llm/dsh-session 等），且发布包 `files` 只含 `lib/index.js` 单文件 bundle —— 从 `@deepseek-ai/dsh-acp` 包 import 内部模块不可行。因此派生 = **整目录 fork**：把上游 `packages/acp/acp/src/` 全部 `.ts` 原样拷进本插件 `src/`（上游已是 `.ts` 后缀导入；执行时 grep 确认无 `.js` 后缀残留即可），包导入（`@deepseek-ai/*`、`@agentclientprotocol/sdk`）保持不动。这是 spec §8"派生范围最小化"的修订：fork 面是整个 acp src，修改面仍只有 index.ts 的下列各点。
 
-- [ ] **Step 0:** 全目录 fork（拷文件 + import 后缀统一 + `npx tsc --noEmit` 通过零语义改动基线；此时尚未加 opentag 逻辑）。
+- [ ] **Step 0:** 全目录 fork（`ls` 清单核对拷全 + grep 无 `.js` 后缀残留 + `npx tsc --noEmit` 通过零语义改动基线；此时尚未加 opentag 逻辑）。
 - [ ] **Step 1:** 在 `src/index.ts` 做且仅做以下修改（每条一个 commit-able 小步）：
 
   1. **导入**：加 `import { checkOpentagCall } from './policy.ts'`、`import { createAuthGate } from './auth.ts'`、`import { createPromptGate } from './prompt-gate.ts'`、`import type { OpentagState } from './policy.ts'`
@@ -580,7 +580,7 @@ buildDshArgs({ authToken: "abc" })            // → ["--profile","opentag","--o
 - [ ] **Step 2:** 红 → **Step 3: 实现** `dshRuntime: Runtime`：
   - `start(opts, cb)`：`randomBytes(32).toString("hex")` → `spawnSafe("dsh", buildDshArgs(...), {cwd: opts.cwd, stdio:["pipe","pipe","pipe"], env: opts.env})`
   - 握手序列（`initialize` → `authenticate` → `opentag/auth` → `opentag/setSystemPrompt{text: opts.systemPrompt}` → `opts.sessionId ? session/resume : session/new` → `set_config_option`（model/reasoningEffort 有则发））
-  - `deliver`：DeliverQueue 串行 → `session/prompt {sessionId, prompt:[{type:"text",text}]}`，`PromptResponse.stopReason` 到达 = 本轮 admission accept；错误 = reject（复用 `protocolAdmission`，exactly-once）
+  - `deliver`：DeliverQueue 串行 → `session/prompt {sessionId, prompt:[{type:"text",text}]}`，`PromptResponse.stopReason` 到达 = 本轮 admission accept；错误 = reject（复用 `protocolAdmission`，exactly-once）。turn 前钩子：`opts.model`/effort 与上次已发值不同 → 先发 `session/set_config_option`（覆盖 E2 的存活期模型切换，不用等 wake 重生）
   - `session/update` 通知 → `mapAcpUpdate` → `cb.onTrajectory` + `onActivity`（tool_call running → working；turnDone → online）
   - `session/request_permission` 服务端请求 → `permissionAnswer(options)` → 回 `{outcome:{outcome:"selected", optionId}}`；null → reject 选项
   - `stop()`：发 `session/cancel` + `session/close`（不等回包）→ `killTree(proc)`
