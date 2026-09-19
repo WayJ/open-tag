@@ -5,6 +5,7 @@
 // Run: npx tsx --test src/daemon/dshRuntime.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -723,7 +724,18 @@ test("detectRuntimes omits dsh when the opentag profile dir is missing (binary p
   }
 });
 
-test("detectRuntimes omits dsh when the binary is absent (profile dir present)", () => {
+/** True when the machine's REAL PATH (without the fake dir) already resolves `dsh` — the same
+ * probe detectRuntimes' has() uses. The binary-absent test only PREPENDS the fake dir and keeps
+ * the system PATH, so a real dsh would leak in; that test is skipped rather than false-failed. */
+const SKIP_BINARY_ABSENT: string | false = (() => {
+  try {
+    if (process.platform === "win32") execSync("where dsh 2>nul", { stdio: "pipe" });
+    else execSync("command -v dsh", { stdio: "pipe" });
+    return "a real dsh is on the system PATH — cannot simulate a dsh-less machine";
+  } catch { return false; }
+})();
+
+test("detectRuntimes omits dsh when the binary is absent (profile dir present)", { skip: SKIP_BINARY_ABSENT }, () => {
   const binDir = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-nobin-"));
   const home = mkdtempSync(path.join(tmpdir(), "open-tag-dsh-nobin-home-"));
   try {

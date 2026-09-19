@@ -7,7 +7,9 @@
 // ACP (JSON-RPC over stdio) handshake and reads the session/new configOptions.
 //  - claude / codex have no "list models" command — their catalogs stay static, server-side, but
 //    supported thinking/reasoning controls are probed dynamically.
-//  - copilot / kimi would need an ACP (JSON-RPC over stdio) handshake — not done yet.
+//  - dsh probes its providers/models via an ACP (JSON-RPC over stdio) handshake (same wire protocol
+//    as its runtime), while copilot / kimi stay static — they would need a protocol-specific
+//    discovery handshake, not yet built.
 //  Both gaps are tracked in docs/tech-debt-tracker.md.
 //
 // The parse functions are pure (unit-tested against fixtures captured from multica's discovery
