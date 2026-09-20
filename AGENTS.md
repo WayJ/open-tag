@@ -195,6 +195,10 @@ Human-auth env flags (`.env` / `.env.prod`):
   Disabled (`404`) when the token is unset.
 
 Transport-layer env flags:
+- `OPEN_TAG_DAEMON_CMD_TEMPLATE` — optional override for the daemon connect/update command the UI shows
+  (connect-a-computer wizard + daemon-update modal). Use when local code is ahead of the npm package, e.g.
+  `npx tsx <repo>/src/daemon/index.ts --server-url {origin} --api-key {key}` (placeholders `{origin}`/`{key}`).
+  Unset/blank → the default `npx @fancyboi999/open-tag-daemon@latest …` command.
 - `ALLOWED_ORIGIN` — comma-separated allowed browser origins for CORS. Dev default (unset): any
   `localhost` / `127.0.0.1` origin. Production: must be set to frontend URL(s).
 - `TRUST_PROXY` — set to `true` only when a single controlled reverse proxy (Railway, nginx,

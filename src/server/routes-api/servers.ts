@@ -16,6 +16,14 @@ import { createRequire } from "node:module";
 // back to "" — a safe no-op that raises no outdated alert — if the file isn't reachable in the current layout.
 const LATEST_DAEMON_VERSION: string = (() => { try { return String(createRequire(import.meta.url)("../../../packages/daemon/package.json").version ?? ""); } catch { return ""; } })();
 
+// Optional override for the daemon connect/update command the UI shows (env OPEN_TAG_DAEMON_CMD_TEMPLATE).
+// Local checkouts ahead of the npm package set e.g. `npx tsx <repo>/src/daemon/index.ts --server-url {origin} --api-key {key}`.
+// Placeholders {origin}/{key}; blank/unset → null → the web falls back to the @latest-pinned npx command.
+const daemonCommandTemplate = (): string | null => {
+  const v = process.env.OPEN_TAG_DAEMON_CMD_TEMPLATE;
+  return typeof v === "string" && v.trim() ? v : null;
+};
+
 const PROJECT_DIRECTORY_RESPONSE_LIMIT = 200;
 const PROJECT_DIRECTORY_QUERY_BYTES = 8 * 1024;
 async function readProjectDirectoryQuery(req: import("node:http").IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -225,7 +233,7 @@ export async function handleServersServerScope(ctx: ServerCtx): Promise<boolean>
       return (sendJson(res, 200, users.map((u) => ({ userId: u.id, name: u.name, displayName: u.displayName, description: u.description, avatarUrl: u.avatarUrl, role: rows.find((r) => r.userId === u.id)?.role }))), true);
     }
     const machines = await db.select().from(schema.machines).where(eq(schema.machines.serverId, serverId));
-    return (sendJson(res, 200, { machines: machines.map((m) => ({ id: m.id, name: m.name, hostname: m.hostname, os: m.os, runtimes: m.runtimes, status: m.status, daemonVersion: m.daemonVersion, isComputer: m.isComputer, apiKeyPrefix: m.apiKeyPrefix, lastHeartbeat: m.lastHeartbeat })), latestDaemonVersion: LATEST_DAEMON_VERSION }), true);
+    return (sendJson(res, 200, { machines: machines.map((m) => ({ id: m.id, name: m.name, hostname: m.hostname, os: m.os, runtimes: m.runtimes, status: m.status, daemonVersion: m.daemonVersion, isComputer: m.isComputer, apiKeyPrefix: m.apiKeyPrefix, lastHeartbeat: m.lastHeartbeat })), latestDaemonVersion: LATEST_DAEMON_VERSION, daemonCommandTemplate: daemonCommandTemplate() }), true);
   }
   // Metadata-only directory picker for one daemon machine. The daemon owns the allowlist and filesystem
   // checks; the server enforces human authorization, tenant ownership, capability/version, and RPC binding.
