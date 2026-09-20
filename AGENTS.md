@@ -211,3 +211,10 @@ Transport-layer env flags:
   that overwrites/prepends; a proxy that blindly *appends* leaves the leftmost spoofable, and
   multi-hop chains (CDN → nginx → app) need hop-count-aware parsing (e.g. `proxy-addr`). Without
   this flag, `clientIp()` uses the TCP socket address (unforgeable).
+
+
+## 开发日志要求
+
+历史开发记录放在 .agents/notes/
+
+请你在git commit 时候或者完成需求时，记录开发日志。
