@@ -278,8 +278,9 @@ export function Computers() {
 function DaemonUpdateModal({ onClose, machine }: { onClose: () => void; machine: { id: string; name: string; currentVersion: string; latestVersion: string; apiKeyPrefix?: string } }) {
   useEscClose(onClose);
   const { t } = useTranslation();
+  const { daemonCommandTemplate } = useStore();
   const [copied, setCopied] = useState(false);
-  const cmd = daemonUpdateCommandTemplate(window.location.origin);
+  const cmd = daemonUpdateCommandTemplate(window.location.origin, daemonCommandTemplate);
   const copy = async () => {
     if (!await copyText(cmd)) { window.prompt(t("misc.connectModalCopyBtn"), cmd); return; }
     setCopied(true); setTimeout(() => setCopied(false), 1500);

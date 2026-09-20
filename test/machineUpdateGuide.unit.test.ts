@@ -33,3 +33,11 @@ test("command template uses @latest and a visible placeholder instead of inventi
   assert.match(cmd, /<your sk_machine_\.\.\. key>/);
   assert.doesNotMatch(cmd, /sk_machine_[A-Za-z0-9]{8,}/, "template must not pretend to know the stored machine key");
 });
+
+test("daemonUpdateCommandTemplate renders a custom template with key placeholder", () => {
+  const tpl = "npx tsx D:/src/daemon/index.ts --server-url {origin} --api-key {key}";
+  assert.equal(
+    daemonUpdateCommandTemplate("https://tag.example.com", tpl),
+    "npx tsx D:/src/daemon/index.ts --server-url https://tag.example.com --api-key <your sk_machine_... key>",
+  );
+});

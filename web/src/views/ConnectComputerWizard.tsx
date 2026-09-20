@@ -21,7 +21,7 @@ type Step = "intro" | "connect" | "connected";
 //   add       → parent-mounted (Computers "+"); starts at connect.
 //   reconnect → parent-mounted; rotates the key on an existing offline machine; starts at connect.
 export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; machine?: { id: string; name: string }; onClose?: () => void }) {
-  const { machines, capabilities, api, serverId, reload } = useStore();
+  const { machines, capabilities, api, serverId, reload, daemonCommandTemplate } = useStore();
   const { t } = useTranslation();
 
   const [dontRemind, setDontRemind] = useState(false);
@@ -98,7 +98,7 @@ export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; 
     if (step === "connect" && res && isOnline) { setNameInput(mode === "reconnect" ? (machine?.name ?? "") : ""); setStep("connected"); }
   }, [step, res, isOnline, mode, machine]);
 
-  const cmd = res ? daemonConnectCommand(window.location.origin, res.key) : "";
+  const cmd = res ? daemonConnectCommand(window.location.origin, res.key, daemonCommandTemplate) : "";
   const copy = async (text: string) => {
     if (!await copyText(text)) { window.prompt(t("misc.connectModalCopyBtn"), text); return; }
     setCopied(true); setTimeout(() => setCopied(false), 1500);

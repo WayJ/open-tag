@@ -85,7 +85,7 @@ Agent data plane   Agent process → HTTP /agent-api/*  (Bearer per-agent token 
 
 ### Distributable daemon package (`packages/daemon/`, `scripts/build-daemon-pkg.mjs`)
 
-Lets any machine join a server without cloning the repo: `npx @fancyboi999/open-tag-daemon@latest --server-url <url> --api-key sk_machine_…` (the connect-a-computer UI generates the same `@latest`-pinned command, so a stale npx cache can't serve an outdated daemon). The daemon talks to the server purely over WS (no DB), so it bundles cleanly.
+Lets any machine join a server without cloning the repo: `npx @fancyboi999/open-tag-daemon@latest --server-url <url> --api-key sk_machine_…` (the connect-a-computer UI generates the same `@latest`-pinned command, so a stale npx cache can't serve an outdated daemon; deployments whose local code runs ahead of npm override the shown command via `OPEN_TAG_DAEMON_CMD_TEMPLATE`, carried to the web on the machines endpoint). The daemon talks to the server purely over WS (no DB), so it bundles cleanly.
 
 - `scripts/build-daemon-pkg.mjs` — esbuild bundles **two** self-contained ESM files into `packages/daemon/dist/`: `cli.mjs` (the `open-tag-daemon` bin = `src/daemon/index.ts`) and `agent-cli.mjs` (the agent CLI = `src/cli/index.ts`, which `openTagBin.ts` injects in bundled mode). ESM output (so `import.meta.url` works) + a `createRequire` banner (so bundled CJS deps `ws`/`commander` and node builtins resolve); ws's optional native accelerators stay external. Run via `npm run pkg:daemon:build`.
 - `packages/daemon/package.json` — the publishable `@fancyboi999/open-tag-daemon` (bin `open-tag-daemon`, `files: [dist, README.md]`, zero runtime deps — everything bundled). `dist/` is gitignored and rebuilt in CI before publish.
