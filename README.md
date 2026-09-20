@@ -117,15 +117,21 @@ All runtimes speak back through the same agent API, so the web app sees one cons
 | Cursor | `cursor-agent -p --output-format stream-json` (one-shot per turn, resumed by `--resume`; runs on your Cursor account) | Supported |
 | Hermes | `hermes chat -q` (one-shot per turn; profiles from `~/.hermes/profiles`, Hermes keeps provider credentials; final-response bridge) | Experimental |
 | Reasonix | `reasonix run --output-format stream-json` (one-shot per turn, resumed by `--resume <session-file>`; models from the resolved `config.toml`) | Experimental |
+| dsh (DeepSeek Harness) | `dsh --profile opentag` (persistent ACP v1 over stdio; token-gated persona injection; models live-probed from ACP `configOptions`; session persisted on graceful stop for cross-restart resume) | Experimental |
 
-> **Roadmap:** runtimes land one at a time, each verified on real hardware before it ships (no demo reel — see `docs/MISSION.md`). The first seven are live, Hermes and Reasonix are experimental; new ones get added on request. (Standalone Gemini CLI is intentionally **not** on the list — Google retired it on 2026-06-18, folding it into Antigravity.)
+> **dsh runtime prerequisites:** the `dsh` CLI on your `PATH` **plus** an `opentag` profile provisioned
+> from the dsh-work repo (`dsh --profile opentag --from-default-profile acp`, then
+> `dsh plugin --profile opentag add <path-to-dsh-opentag-agent-runtime>`), and provider credentials
+> in `~/.dsh/.credentials.yaml`. Without the profile, open-tag won't detect dsh at all (by design).
+
+> **Roadmap:** runtimes land one at a time, each verified on real hardware before it ships (no demo reel — see `docs/MISSION.md`). The first seven are live, Hermes, Reasonix, and dsh are experimental; new ones get added on request. (Standalone Gemini CLI is intentionally **not** on the list — Google retired it on 2026-06-18, folding it into Antigravity.)
 
 ## Quick start
 
 > **Deploying to a VPS or server?** See **[`docs/self-host.md`](docs/self-host.md)** for the
 > production guide (Docker Compose recommended, HTTPS, systemd, backup, secrets).
 
-Prerequisites: Node.js 20+, Docker, and at least one supported runtime CLI on your `PATH` (`claude`, `codex`, `copilot`, `opencode`, `kimi`, `pi`, `cursor-agent`, or `reasonix`).
+Prerequisites: Node.js 20+, Docker, and at least one supported runtime CLI on your `PATH` (`claude`, `codex`, `copilot`, `opencode`, `kimi`, `pi`, `cursor-agent`, `reasonix`, or `dsh` — dsh additionally needs its `opentag` profile, see the note under Supported runtimes).
 
 ```bash
 cp .env.example .env
@@ -234,6 +240,15 @@ web/        React + Vite workspace UI
 ## Project status
 
 The core collaboration loop is working end to end with Claude Code and Codex: agents can wake from mentions, operate in persistent workspaces, collaborate with other agents, and report results back into channels and task threads.
+
+> **dsh runtime — verified on real hardware (2026-09-19, isolated worktree E2E):** created a dsh agent
+> via the UI (runtime picker shows DeepSeek Harness; the model dropdown live-probed 16 models via ACP
+> `configOptions`); @mention → agent wake → a real LLM turn (glm-5.3) → reply landed in the channel —
+> two-way confirmed twice; the activity trajectory (thinking → working → online) rendered; cross-restart
+> session resume confirmed (daemon restart, `agent started resume:true`). dsh suites: 56 tests
+> (55 pass, 1 platform-conditional skip);
+> fake-dsh integration tests cover handshake, auth failure, serial delivery, tool dedup, permission
+> answering, and stop ordering. Evidence log: `.agents/notes/2026-09-19-dsh-runtime-e2e.md`.
 
 open-tag is still early-stage software. Authentication and deployment are suitable for self-hosted evaluation, but production hardening, third-party OAuth integrations, web push, and large multi-host deployments remain active work.
 

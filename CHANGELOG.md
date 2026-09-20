@@ -79,6 +79,43 @@ from `main`; see commit history for fine-grained server/web changes.
   could never be released, permanently orphaning the trigger's primary slot. `publishing`
   is now included; `consumed` stays untouched. `src/server/replyCoordination.ts`.
 
+## [0.17.0] — 2026-09-19
+
+### Added
+
+- **dsh agent runtime (DeepSeek Harness)** (`src/daemon/dshRuntime.ts`, experimental): agents can run
+  on the dsh CLI over a persistent **ACP v1 + `opentag/*` extension** connection — JSON-RPC NDJSON
+  over stdio, hand-rolled like codexRuntime's client (no new dependency). Spawn:
+  `dsh --profile opentag --opentag-auth-token <per-spawn random token>`; the derived ACP server
+  refuses every `opentag/*` method until the argv token is echoed (`opentag/auth`), and the standing
+  system prompt is injected **token-gated and one-shot per process** via `opentag/setSystemPrompt`
+  (later turns carry only the turn text). Sessions persist (`session/new` / `session/resume` +
+  `cb.onSession`), so agents **resume across daemon restarts**; graceful stop is `session/cancel` +
+  `session/close` + stdin EOF — dsh persists the session on the clean close — with `killTree` after a
+  1s grace as the hung-process fallback. Deliveries run through a strictly serial queue with
+  per-delivery exactly-once admission (the `session/prompt` response is the boundary; the initial
+  admission settles on the first `session/update`, since real agentic first turns can outlive the
+  3-min start-admission timeout). ACP permission requests auto-answer the first allow-ish option.
+  Detection is two-condition (`detectRuntimes()`): `dsh` on PATH **and** `<DSH_HOME|~/.dsh>/profiles/opentag`
+  provisioned. Verified live E2E (UI create → @mention wake → glm-5.3 turn → channel reply, twice;
+  cross-restart resume `resume:true`) — `.agents/notes/2026-09-19-dsh-runtime-e2e.md`.
+- **dsh dynamic model discovery**: the `probe-models` handler now drives the dsh runtime's
+  ACP handshake (`initialize → authenticate → opentag/auth → opentag/setSystemPrompt →
+  session/new → session/close`) in a throwaway probe process (`dsh`, or `OPEN_TAG_DSH_BIN`)
+  and parses the session/new `configOptions` into the model list (provider-grouped `model`
+  select + session-level `reasoning_effort` thinking levels). The probe needs longer than
+  the one-shot runtimes, so the budgets are paired: daemon `LIST_BUDGET_MS.dsh` 25s under
+  server `PROBE_BUDGET_MS.dsh` 30s — the dsh dropdown stays empty if either side silently
+  falls back to the 7s/8s defaults. `src/daemon/listModels.ts` + `src/server/runtimeModels.ts`.
+
+### Fixed
+
+- **Windows `.cmd` shim resolution in the dsh model probe** — the probe spawned `dsh` with bare
+  `spawn()`, which cannot execute npm's `.cmd` wrapper shims on Windows (ENOENT) and left the dsh
+  model dropdown empty; the probe now resolves the real executable via `spawnSafe` (PATH/PATHEXT +
+  cross-spawn). The generic `runList` driver still has the latent issue (tech-debt I110).
+  `src/daemon/listModels.ts`.
+
 ## [0.15.1] — 2026-09-17
 
 ### Fixed

@@ -3,18 +3,24 @@
 // candidates reflect what that machine + login can actually use (not a hard-coded server table).
 //
 // Scope: opencode / cursor / pi enumerate models; Hermes enumerates local profiles; reasonix
-// enumerates the providers/models of its resolved config via `reasonix doctor --json`.
+// enumerates the providers/models of its resolved config via `reasonix doctor --json`; dsh drives an
+// ACP (JSON-RPC over stdio) handshake and reads the session/new configOptions.
 //  - claude / codex have no "list models" command — their catalogs stay static, server-side, but
 //    supported thinking/reasoning controls are probed dynamically.
-//  - copilot / kimi would need an ACP (JSON-RPC over stdio) handshake — not done yet.
+//  - dsh probes its providers/models via an ACP (JSON-RPC over stdio) handshake (same wire protocol
+//    as its runtime), while copilot / kimi stay static — they would need a protocol-specific
+//    discovery handshake, not yet built.
 //  Both gaps are tracked in docs/tech-debt-tracker.md.
 //
 // The parse functions are pure (unit-tested against fixtures captured from multica's discovery
 // research) and mirror multica's server/pkg/agent/models.go field-for-field.
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { spawnSafe } from "./spawnSafe.js";
 
 export interface ThinkingLevel { value: string; label: string; description?: string }
 export interface ModelThinking { levels: ThinkingLevel[]; default?: string }
@@ -137,6 +143,65 @@ export function parseReasonixModels(jsonStr: string): DiscoveredModel[] {
     if (!isModelId(id) || seen.has(id)) continue;
     seen.add(id);
     out.push({ id, label: id, provider: provider?.name ?? "reasonix", ...(id === defaultId ? { default: true } : {}) });
+  }
+  return out;
+}
+
+// dsh (DeepSeek Harness) has no list command — its catalog is the `model` select inside an ACP
+// session/new response (`result.configOptions`). Shape ground truth: the live capture committed at
+// src/daemon/__fixtures__/dsh-session-new.json (copied from
+// dsh-work-opentag/plugins/dsh-opentag-agent-runtime/tests/fixtures/session-new-response.json).
+//  - The model select's options are provider groups; each leaf's `value` is a JSON-encoded
+//    [provider, model] pair (e.g. '["deepseek-official","deepseek-v4-flash"]') — that pair is what
+//    the CLI would actually run, so it is the source of truth for id/provider (group `name` is
+//    display-only).
+//  - `currentValue` names the session's resolved default model (matched against the raw value).
+//  - A separate session-level `reasoning_effort` select carries the thinking levels; they apply to
+//    every model (same projection as claude/codex), defaulting to its own currentValue.
+export function parseDshConfigOptions(response: unknown): DiscoveredModel[] {
+  const configOptions = (response as any)?.result?.configOptions;
+  if (!Array.isArray(configOptions)) return [];
+  const modelSelect = configOptions.find((c: any) => c?.id === "model" && c?.type === "select");
+  if (!modelSelect || !Array.isArray(modelSelect.options)) return [];
+
+  // Session-level reasoning_effort select → thinking levels shared by every model.
+  const effortSelect = configOptions.find((c: any) => c?.id === "reasoning_effort" && c?.type === "select");
+  let thinking: ModelThinking | undefined;
+  if (effortSelect && Array.isArray(effortSelect.options)) {
+    const levels: ThinkingLevel[] = effortSelect.options
+      .map((o: any) => {
+        const l: ThinkingLevel = { value: typeof o?.value === "string" ? o.value : "", label: typeof o?.name === "string" ? o.name : "" };
+        if (typeof o?.description === "string") l.description = o.description; // omitted when absent, not undefined-keyed
+        return l;
+      })
+      .filter((l: ThinkingLevel) => l.value && l.label);
+    if (levels.length) {
+      const cur = effortSelect.currentValue;
+      thinking = { levels, ...(typeof cur === "string" && levels.some((l) => l.value === cur) ? { default: cur } : {}) };
+    }
+  }
+
+  const out: DiscoveredModel[] = [];
+  const seen = new Set<string>();
+  for (const group of modelSelect.options) {
+    const leaves = Array.isArray(group?.options) ? group.options : [];
+    for (const leaf of leaves) {
+      let pair: unknown;
+      try { pair = JSON.parse(typeof leaf?.value === "string" ? leaf.value : ""); } catch { continue; } // not a [provider, model] pair → not a model choice
+      const [provider, model] = Array.isArray(pair) ? pair : [];
+      if (typeof provider !== "string" || !provider || typeof model !== "string" || !model) continue;
+      const key = `${provider}/${model}`;
+      if (seen.has(key)) continue; // the same model can appear in two groups — list it once
+      seen.add(key);
+      const isDefault = leaf.value === modelSelect.currentValue;
+      out.push({
+        id: model,
+        label: typeof leaf.name === "string" && leaf.name ? leaf.name : model,
+        provider,
+        ...(isDefault ? { default: true } : {}),
+        ...(thinking ? { thinking } : {}),
+      });
+    }
   }
   return out;
 }
@@ -273,6 +338,12 @@ function discoverHermesProfiles(): DiscoveredModel[] {
 // ── shelling out (not unit-tested — covered by the live E2E run) ──
 
 const LIST_TIMEOUT_MS = 7_000; // a single probe must stay under runtimeModels' 8s WS-RPC budget, else the server gives up while the daemon keeps spawning
+// Per-runtime overrides of LIST_TIMEOUT_MS. dsh is not one-shot: the probe spawns the harness and
+// drives a full ACP handshake (initialize → authenticate → opentag/auth → setSystemPrompt →
+// session/new), so 7s is not enough. Must stay under runtimeModels' PROBE_BUDGET_MS.dsh = 30s —
+// the pair is load-bearing; if either side changes, change both (server gives up first otherwise,
+// the modal falls back to static, and the dsh dropdown renders empty).
+const LIST_BUDGET_MS: Record<string, number> = { dsh: 25_000 };
 const OUT_CAP = 256 * 1024; // bound memory if a CLI floods stdout
 
 // Run a runtime's list command and capture stdout/stderr. Uses the daemon's own env (so the CLI sees
@@ -295,6 +366,90 @@ function runList(bin: string, args: string[], timeoutMs: number = LIST_TIMEOUT_M
     const timer = setTimeout(() => { try { proc.kill(process.platform === "win32" ? undefined : "SIGKILL"); } catch { /* */ } }, timeoutMs);
     proc.on("error", (e) => { clearTimeout(timer); resolve({ stdout, stderr: stderr || String((e as any)?.message ?? e), code: 1 }); });
     proc.on("exit", (code) => { clearTimeout(timer); resolve({ stdout, stderr, code }); });
+  });
+}
+
+// dsh probe system prompt: opentag/setSystemPrompt is one-shot per process and session/new refuses
+// to run without it — this throwaway process only needs the gate satisfied, never a real persona.
+const DSH_PROBE_PROMPT = "probe";
+
+// dsh is not one-shot: it speaks ACP (JSON-RPC over NDJSON stdio) and only exposes its catalog after
+// the full handshake. This driver mirrors the plugin's verified smoke client
+// (dsh-work-opentag/plugins/dsh-opentag-agent-runtime/tools/smoke.mjs): initialize → authenticate →
+// opentag/auth → opentag/setSystemPrompt → session/new → (capture configOptions) → session/close.
+// Binary resolution: `dsh` on PATH, or an absolute path via OPEN_TAG_DSH_BIN (the harness CLI is a
+// `node apps/cli/lib/bin.js` checkout, often not on PATH). Spawned via spawnSafe — raw spawn cannot
+// exec the .cmd shim npm installs on Windows (no PATHEXT resolution → ENOENT → probe always null;
+// the daemon-side dsh runtime hits the same class of problem and uses spawnSafe for it).
+// Whole exchange bounded by timeoutMs — a hung handshake, a non-NDJSON-flooded stdout, or an early
+// exit all settle null. Never throws.
+export function probeDshModels(timeoutMs: number): Promise<DiscoveredModel[] | null> {
+  return new Promise((resolve) => {
+    const bin = process.env.OPEN_TAG_DSH_BIN || "dsh";
+    const token = randomBytes(16).toString("hex"); // per-spawn secret; opentag/auth echoes it back
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS; // same proxy-flag gotcha runList guards against
+    let proc: ChildProcess;
+    try {
+      proc = spawnSafe(bin, ["--profile", "opentag", "--opentag-auth-token", token], { stdio: ["pipe", "pipe", "pipe"], env, windowsHide: true });
+    } catch {
+      return resolve(null);
+    }
+    const pending = new Map<number, (m: any) => void>();
+    let nextId = 1;
+    let done = false;
+    const finish = (v: DiscoveredModel[] | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { proc.kill(); } catch { /* already gone */ }
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    const write = (msg: unknown): boolean => {
+      try { proc.stdin?.write(JSON.stringify(msg) + "\n"); return true; } catch { return false; }
+    };
+    createInterface({ input: proc.stdout! }).on("line", (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let msg: any;
+      try { msg = JSON.parse(trimmed); } catch { return; } // stdout pollution (banners) — ignore
+      if (msg?.method !== undefined && msg?.id !== undefined) {
+        // server→client request (session/request_permission, fs reads…): a probe implements nothing;
+        // method-not-found so the agent never blocks on us (same answer the smoke client gives).
+        write({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "open-tag probe client" } });
+        return;
+      }
+      if (msg?.id === undefined || msg?.method !== undefined) return; // notification (session/update…) — not a response
+      pending.get(msg.id)?.(msg);
+      pending.delete(msg.id);
+    });
+    proc.on("error", () => finish(null)); // spawn ENOENT (no dsh, bad OPEN_TAG_DSH_BIN)
+    proc.on("exit", () => finish(null)); // died before session/new answered
+    const request = (method: string, params: unknown): Promise<any> =>
+      new Promise((res, rej) => {
+        const id = nextId++;
+        pending.set(id, res);
+        if (!write({ jsonrpc: "2.0", id, method, params })) { pending.delete(id); rej(new Error("dsh stdin closed")); }
+        // No per-request timer: the single deadline above kills the process, and either the response
+        // arrives or "exit" settles the whole probe null.
+      });
+    void (async () => {
+      try {
+        await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+        await request("authenticate", { methodId: "opentag" });
+        await request("opentag/auth", { token });
+        await request("opentag/setSystemPrompt", { text: DSH_PROBE_PROMPT });
+        const sessionNew = await request("session/new", { cwd: tmpdir(), mcpServers: [] });
+        const models = parseDshConfigOptions(sessionNew);
+        if (!models.length) return finish(null);
+        write({ jsonrpc: "2.0", id: nextId++, method: "session/close", params: { sessionId: sessionNew?.result?.sessionId } }); // best-effort cleanup
+        proc.stdin?.end(); // profile exits on EOF (same graceful end as the smoke client)
+        finish(models);
+      } catch {
+        finish(null);
+      }
+    })();
   });
 }
 
@@ -344,6 +499,12 @@ export async function listModels(runtime: string): Promise<DiscoveredModel[] | n
     case "hermes": {
       const profiles = discoverHermesProfiles();
       return profiles.length ? profiles : null;
+    }
+    case "dsh": {
+      // ACP handshake probe — the budget override above keeps it alive long enough for the harness
+      // to boot and answer session/new (server-side pair: PROBE_BUDGET_MS.dsh = 30s).
+      const models = await probeDshModels(LIST_BUDGET_MS[runtime] ?? LIST_TIMEOUT_MS);
+      return models?.length ? models : null;
     }
     default:
       return null;

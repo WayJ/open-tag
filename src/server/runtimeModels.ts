@@ -30,11 +30,18 @@ export const CODEX_FALLBACK_MODELS: ModelOption[] = [
 
 // Runtimes probed live on the machine: opencode/cursor/pi/hermes enumerate their model/profile list; claude/codex
 // keep a static catalog but probe each model's reasoning-effort levels; reasonix enumerates its resolved config
-// via `reasonix doctor --json`. The rest stay fully static.
-export const DYNAMIC_RUNTIMES = new Set(["opencode", "cursor", "pi", "hermes", "claude", "codex", "reasonix"]);
+// via `reasonix doctor --json`; dsh drives an ACP handshake and reads the session/new configOptions.
+// The rest stay fully static.
+export const DYNAMIC_RUNTIMES = new Set(["opencode", "cursor", "pi", "hermes", "claude", "codex", "reasonix", "dsh"]);
 
 const TTL_MS = 60_000; // matches multica's 60s model cache — lists rarely change within a minute
 const PROBE_TIMEOUT_MS = 8_000; // bound how long the modal waits on the first probe before fallback
+// Per-runtime overrides of PROBE_TIMEOUT_MS. dsh's daemon-side probe boots the harness and drives a
+// full ACP handshake before session/new answers (listModels LIST_BUDGET_MS.dsh = 25s) — the server
+// WS-RPC budget must stay ABOVE the daemon budget or the server gives up mid-probe, the modal falls
+// back to static, and the dsh dropdown renders empty. The pair (25s ↔ 30s) is load-bearing; change
+// both together.
+const PROBE_BUDGET_MS: Record<string, number> = { dsh: 30_000 };
 const cache = new Map<string, { models: ModelOption[]; exp: number }>();
 
 // Returns the machine's live model list for a runtime (cached ~60s), or null on miss/offline/timeout/
@@ -43,7 +50,7 @@ export async function getDynamicModels(machineId: string, runtime: string): Prom
   const key = `${machineId}:${runtime}`;
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.models;
-  const r = await requestDaemonByMachine(machineId, { type: "probe-models", runtime }, PROBE_TIMEOUT_MS);
+  const r = await requestDaemonByMachine(machineId, { type: "probe-models", runtime }, PROBE_BUDGET_MS[runtime] ?? PROBE_TIMEOUT_MS);
   const models = Array.isArray(r?.models) ? (r.models as ModelOption[]) : null;
   if (!models || !models.length) return null; // never cache empty/error — don't lock a transient failure for 60s
   models.sort((a, b) => (b.default ? 1 : 0) - (a.default ? 1 : 0)); // default first → frontend preselects ms[0]
