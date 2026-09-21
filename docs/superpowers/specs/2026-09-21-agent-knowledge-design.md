@@ -62,8 +62,9 @@ FEATURES P7 描述方向:agent 自建多条 memo,全文检索,受众是 agent �
   - 返回条目:id/title/shared/createdAt/updatedAt/mine(是否自己创建)
   - **不返回 content**(列表瘦身,content 经 search 命中或 detail 取)
 - `GET /agent-api/knowledge/search?q=&limit=&before=`
-  - q 非空,ILIKE `%q%`(转义 `%_\`)扫 searchText,回 title + snippet(content
-    命中段 ±60 字符)+ shared/mine/createdAt;keyset 分页;50/页
+  - q 非空,ILIKE `%q%`(转义 `%_\`)扫 searchText,回 **id** + title + snippet
+    (content 命中段 ±60 字符)+ shared/mine/createdAt(id 必带——命中要能链到
+    show/update/delete);keyset 分页;50/页
 - `GET /agent-api/knowledge/detail?id=`(补 content 取回;id 支持前缀解析,
   走 `resolveIdOrPrefix` 同款 uuid 规范——关 tech-debt I87 方向)
 - `PATCH /agent-api/knowledge/update` `{id, title?, content?}`
@@ -77,7 +78,8 @@ FEATURES P7 描述方向:agent 自建多条 memo,全文检索,受众是 agent �
 - JWT + `manageAgents` capability 门控
 - 返回该 agent 私有条目 + 工作区共享条目(含 createdByAgentId → 前端映射创建者名)
 - Agent Profile 新 **Knowledge tab**:私有/共享分组,只读列表 + 查看 content 弹层;
-  复用现有 tab 结构(overview/permissions/…/activity 旁加一项)
+  复用现有 tab 结构(profile/permissions/dms/reminders/workspace/integrations/
+  activity 旁加一项)
 
 ## CLI(`src/cli/index.ts`)
 
@@ -105,7 +107,8 @@ open-tag knowledge delete <id|prefix>
 - agent 面:token 鉴权 + scope 双门控 + serverId 租户隔离;id 前缀解析走 uuid 规范
 - 越权矩阵:他人私有 → list/search/detail 均不可见(404/空);共享层改删仅创建者
 - 人类面:manageAgents 门控,只读
-- 无 daemon 面变更(知识库纯 server 数据 + agent HTTP 面)
+- 无 daemon **协议**变更(知识库纯 server 数据 + agent HTTP 面;CLI/prompt 随包
+  发布的发版动作见"实现载体")
 
 ## 验证(TDD,用户指定)
 
@@ -123,16 +126,23 @@ open-tag knowledge delete <id|prefix>
    - @dev-bot 实跑:`knowledge create`(私有+共享)→ `search` 命中(中文查询)
      → `update` → `list` → Profile Knowledge tab 浏览器可见(截图)
 4. **doc-sync**:db-schema.md(新列/索引)、ARCHITECTURE §II(路由/CLI)、
-   FEATURES P7(勾选 knowledge 行、删 P2 pending 注)、scopes 权限 UI、
+   FEATURES P7(**重写** knowledge 行描述——原行写死 "PG tsvector + GIN",
+   与本 spec 的 ILIKE 决策相反;删 P2 pending 注)、scopes 权限 UI、
    tech-debt(无 trigram 索引注记)
 
 ## 实现载体
 
 worktree `agent-knowledge`(分支 `feature/agent-knowledge`)。涉及:
-`src/db/schema.ts`(2 列+2 索引)、`src/server/routes-agent/knowledge.ts`(新)、
-`src/server/routes-api/agents.ts`(只读端点)、`src/cli/index.ts`(6 子命令)、
-`src/daemon/prompt.ts`(1 段)、web(Profile Knowledge tab + 权限 UI 1 行)、docs 同批。
-预计 ~400 行 + 测试。
+`src/db/schema.ts`(2 列+2 索引)、`src/server/routes-agent.ts`(网关
+`requiredScope` knowledge 映射 + mount 一行)、`src/server/routes-agent/knowledge.ts`
+(新)、`src/server/routes-api/agents.ts`(只读端点)、`src/cli/index.ts`
+(6 子命令)、`src/daemon/prompt.ts`(1 段)、web(Profile Knowledge tab +
+权限 UI 1 行)、docs 同批。预计 ~400 行 + 测试。
 
-**零 daemon bundle 变更**(prompt.ts 属常驻提示,daemon 已带;无 daemon 协议改动)
-——无发版项;但 prompt.ts 变更需 grep provider 工具名 = 零命中(红线)。
+**含发版项(评审修正 2026-09-22)**:CLI(`src/cli/index.ts` → 包内
+`dist/agent-cli.mjs`)与 `prompt.ts`(→ `dist/cli.mjs`)都随 daemon 包发布
+(`scripts/build-daemon-pkg.mjs`)——不发包,自部署机器上 agent 拿旧 CLI +
+旧 prompt,常驻提示教 `open-tag knowledge search` 实为 unknown command,
+正是 #44 "merged ≠ shipped" 失败模式。故:minor bump
+`packages/daemon/package.json` + GitHub Release + CHANGELOG 同批 + 机上 bounce。
+prompt.ts 变更需 grep provider 工具名 = 零命中(红线)。

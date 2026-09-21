@@ -14,5 +14,7 @@
 - [x] 设计 spec:`docs/superpowers/specs/2026-09-21-agent-knowledge-design.md`
   (schema 2 列+2 索引、`/agent-api/knowledge/*` 6 端点、CLI 6 子命令、
   knowledge:write scope、prompt 一段、Profile tab、TDD 三层验证)
-- [ ] spec 评审循环 → 用户过目 → 实施计划(writing-plans)
+- [x] spec 评审循环:首轮 1 阻塞项(CLI/prompt 均随 daemon 包发布,
+  "无发版项"声明错误——#44 失败模式)+ 4 advisory;全部修正后复审 **Approved**
+- [ ] 用户过目 spec → 实施计划(writing-plans)
 - [ ] 实现 + 测试 + dev:e2e 实跑
