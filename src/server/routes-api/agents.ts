@@ -1,6 +1,6 @@
 // Auto-extracted from the former routes-api.ts monolith — bodies are verbatim.
 import type { ServerCtx } from "./ctx.js";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { requireCap } from "../capabilities.js";
 import { parseAgentInputPolicyPatch } from "../agentInputPolicy.js";
@@ -10,6 +10,7 @@ import { PROJECT_DIRECTORY_CAPABILITY, projectDirectoryBlockReason, requestDaemo
 import { publish } from "../realtime.js";
 import { ALL_SCOPE_KEYS, SCOPES, effectiveScopes, isScopeLiteral } from "../scopes.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
+import { clampLimit, keysetWhere } from "../routes-agent/knowledge.js";
 
 async function canonicalProjectPath(serverId: string, machineId: string, value: unknown): Promise<{ projectPath: string | null } | { error: string; status: number }> {
   if (value === undefined || value === null || value === "") return { projectPath: null };
@@ -354,6 +355,44 @@ export async function handleAgents(ctx: ServerCtx): Promise<boolean> {
       out.push({ id: ch.id, name: peer.name, peerId, peerType: "agent", lastMessageAt: ch.lastMessageAt });
     }
     return (sendJson(res, 200, out), true);
+  }
+  // Knowledge browse (read-only, owner/admin): the agent's private entries + workspace-shared ones,
+  // with content, for oversight. Same keyset pagination contract as the agent plane (clampLimit /
+  // keysetWhere imported from routes-agent/knowledge.ts to avoid drift); searchText is an internal
+  // derived column and is never exposed. createdBy = creator agent's name, mapped in one batch inArray.
+  const aknow = /^\/api\/agents\/([^/]+)\/knowledge$/.exec(p);
+  if (aknow && !isUuid(aknow[1]!)) return (sendErr(res, 404, "agent not found"), true);
+  if (aknow && method === "GET") {
+    if (!await requireCap(serverId, userId, "manageAgents")) return (sendErr(res, 403, "need manageAgents capability"), true);
+    const agId = aknow[1]!;
+    const own = (await db.select({ id: schema.agents.id }).from(schema.agents).where(and(
+      eq(schema.agents.id, agId), eq(schema.agents.serverId, serverId), isNull(schema.agents.deletedAt),
+    )))[0];
+    if (!own) return (sendErr(res, 404, "agent not found"), true);
+    const K = schema.knowledge;
+    const scopeRaw = url.searchParams.get("scope") ?? "all";
+    if (scopeRaw !== "all" && scopeRaw !== "private" && scopeRaw !== "shared") return (sendErr(res, 400, "scope must be all|private|shared"), true);
+    const limit = clampLimit(url.searchParams.get("limit"));
+    const vis = and(
+      eq(K.serverId, serverId),
+      scopeRaw === "private" ? eq(K.agentId, agId) : scopeRaw === "shared" ? isNull(K.agentId) : or(eq(K.agentId, agId), isNull(K.agentId)),
+    )!;
+    const rows = await db.select({
+      id: K.id, title: K.title, content: K.content, agentId: K.agentId, createdByAgentId: K.createdByAgentId,
+      createdAt: K.createdAt, updatedAt: K.updatedAt,
+    }).from(K)
+      .where(await keysetWhere(vis, url.searchParams.get("before")))
+      .orderBy(desc(K.createdAt), desc(K.id))
+      .limit(limit + 1);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const creatorIds = [...new Set(page.map((r) => r.createdByAgentId).filter((v): v is string => !!v))];
+    const creators = creatorIds.length
+      ? await db.select({ id: schema.agents.id, name: schema.agents.name }).from(schema.agents).where(inArray(schema.agents.id, creatorIds))
+      : [];
+    const nameById = new Map(creators.map((c) => [c.id, c.name]));
+    const entries = page.map((r) => ({ ...r, createdBy: r.createdByAgentId ? nameById.get(r.createdByAgentId) ?? null : null }));
+    return (sendJson(res, 200, { entries, hasMore }), true);
   }
   return false;
 }

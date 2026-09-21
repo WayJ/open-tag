@@ -54,3 +54,22 @@
 - 实现要点:search 的 snippet 在 JS 侧 makeSnippet(同 messages.ts:105 先例);
   keyset 游标行先在可见域内解析,缺失降级为第一页;limit clamp 1..50(50+1 哨兵
   行出 hasMore);update 用合并后 title/content 重固化 searchText
+
+## Task 5 · 人类面只读端点(2026-09-22)
+
+- `GET /api/agents/:id/knowledge?scope=all|private|shared&limit=&before=`(routes-api/agents.ts,
+  逐字仿 workspace-files 先例:requireCap manageAgents 先 403 → agent 存在且本 server
+  (含 deletedAt 过滤)否则 404);返回该 agent 私有(agentId=:id)+ 共享(agentId is null)
+  行,含 content(≤50/页,clampLimit 1..50 + limit+1 哨兵出 hasMore)
+- 复用防漂移:把 routes-agent/knowledge.ts 的 `keysetWhere`/`clampLimit` 从私有导出
+  (Task 4 计划允许的两种路径里选导出),人类面直接 import——游标行同样在人类可见域
+  (私有∪共享)内解析,缺失降级第一页
+- 响应行:id/title/content/agentId/createdByAgentId/createdBy/createdAt/updatedAt,
+  **不暴露 searchText**(内部派生列);createdBy = createdByAgentId → agents.name,
+  一条 batch inArray 映射(Set 去重、空集跳过查询);agent 面 detail 契约未动
+- Task 4 评审遗留 A 修复:update 路径 `db.update` 加 `.returning({id})`,并发 delete
+  竞态下 0 行命中现在返回 404(复用 NOT_FOUND 常量,语义同计划文案"knowledge not
+  found"),不再谎报 ok:true
+- 集成实跑 66/66 ALL PASS(用例 12 由 RED 转绿:owner 浏览含私有+共享、content 与
+  createdBy 映射到 @handle、scope=private/shared 过滤、plain member 403);
+  knowledge.unit 7/7、channelArtifacts.integration 复跑 ALL PASS、root+web typecheck 绿

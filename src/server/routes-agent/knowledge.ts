@@ -43,8 +43,9 @@ function visibilityFor(agentId: string, serverId: string, scope: "mine" | "share
 
 /** Keyset cursor: `before=<id>` → strictly older than that row's (createdAt, id) tie-broken pair.
  *  The cursor row is resolved within the caller's visibility first; a missing cursor (deleted,
- *  foreign, garbage) degrades to the first page rather than an error. */
-async function keysetWhere(vis: SQL, before: string | null | undefined): Promise<SQL> {
+ *  foreign, garbage) degrades to the first page rather than an error. Exported so the human-plane
+ *  read-only browse (routes-api/agents.ts) shares the exact same cursor semantics. */
+export async function keysetWhere(vis: SQL, before: string | null | undefined): Promise<SQL> {
   const b = (before ?? "").trim();
   if (!b) return vis;
   const cur = (await db.select({ createdAt: K.createdAt, id: K.id }).from(K).where(and(vis, eq(K.id, b))).limit(1))[0];
@@ -53,8 +54,9 @@ async function keysetWhere(vis: SQL, before: string | null | undefined): Promise
 }
 
 /** List + search share the pagination contract: limit clamped 1..KNOWLEDGE_PAGE_SIZE, limit+1
- *  sentinel row → hasMore without an exact-boundary false positive (mirrors the messages search route). */
-function clampLimit(raw: string | null): number {
+ *  sentinel row → hasMore without an exact-boundary false positive (mirrors the messages search route).
+ *  Exported so the human-plane read-only browse (routes-api/agents.ts) clamps identically. */
+export function clampLimit(raw: string | null): number {
   const n = Math.floor(Number(raw ?? KNOWLEDGE_PAGE_SIZE));
   if (!Number.isFinite(n)) return KNOWLEDGE_PAGE_SIZE;
   return Math.min(Math.max(n, 1), KNOWLEDGE_PAGE_SIZE);
@@ -164,7 +166,10 @@ export async function handleKnowledgeRoutes(
       content = v.content;
     }
     const updatedAt = new Date();
-    await db.update(K).set({ title, content, searchText: buildSearchText(title, content), updatedAt }).where(eq(K.id, id!));
+    // .returning() + 0-rows → 404: the creator pre-check above can race a concurrent delete, and
+    // reporting ok:true after an update that hit nothing would silently lie about the outcome.
+    const [updated] = await db.update(K).set({ title, content, searchText: buildSearchText(title, content), updatedAt }).where(eq(K.id, id!)).returning({ id: K.id });
+    if (!updated) return (sendErr(res, 404, NOT_FOUND), true);
     return (sendJson(res, 200, { ok: true, id: id!, updatedAt }), true);
   }
 
