@@ -248,7 +248,7 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 
 **Files:**
 - Modify: `web/src/views/Members.tsx`(tab 数组 :262-270 加 `["knowledge", t("members.tabKnowledge")]` —— **filter 同 dms:`k !== "knowledge" || capabilities.manageAgents`**,后端对非管理员 403,不门控会开出错误 tab;:274-279 分支加 `KnowledgeTab`;新组件 `KnowledgeTab` 放本文件,仿 `RemindersTab`(:617)的取数+列表形态:fetch `GET /api/agents/:id/knowledge`,私有/共享两组,行 = title + 创建者 + 时间,点击展开 content(行内 `<pre>` 折叠),空态文案)
-- Modify: `web/src/locales/en.json` + `zh.json`(`members.tabKnowledge`: "Knowledge"/"知识库" + 组标签/空态/创建者字段名等 ≤6 键)
+- Modify: `web/src/locales/en.json` + `zh.json`(`members.tabKnowledge`: "Knowledge"/"知识库" + 组标签/空态/创建者字段名等 ≤6 键;**creator 为 null 渲染 "(未知)" 类兜底,不假设非空**——软删 agent 名仍可解析,硬删无路径但别崩)
 
 - [ ] **Step 8.1** 组件 + tab + locale 键;`npm run typecheck` 过
 - [ ] **Step 8.2** Commit:`feat(web): agent profile Knowledge tab (admin read-only browse)`
@@ -257,9 +257,10 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 
 **Files:**
 - Modify: `FEATURES.md`(P7 knowledge 行**重写**为 ILIKE 实现 + 勾选;P2 :29 pending 行删 knowledge 句;P3/P7 注记核对)
-- Modify: `ARCHITECTURE.md` §II(agent-api 路由表 + CLI 子命令 + scopes 15)
+- Modify: `ARCHITECTURE.md` §II(agent-api 路由表 + CLI 子命令 + scopes 15;**一句话注明 keysetWhere/clampLimit 由 routes-api/agents.ts 有意跨面复用 routes-agent/knowledge.ts——两平面游标语义同源**)
+- Modify: `docs/authorization.md`(:64 "14 capability literals"、:67 "grants all 14" 等 14→15 引用全改)
 - Modify: `docs/PLANS.md`(Active 加 agent-knowledge 条目链 spec+本计划)
-- Modify: `docs/tech-debt-tracker.md`(新 I 条目:v1 无 trigram/索引,ILIKE 顺序扫描,量大再补)
+- Modify: `docs/tech-debt-tracker.md`(新 I 条目:v1 无 trigram/索引,ILIKE 顺序扫描,量大再补;同条注记:CLI list/search 未暴露 hasMore/--before,>50 条静默截断;prompt.ts Startup sequence 第 5 步未同步 knowledge 去向提示;prompt.test.ts 可加 provider 工具名负向断言把红线机械化)
 - Modify: `README.md` / `README.zh-CN.md`(各 "Core capabilities"/"项目状态" 节加一行——两文件同批)
 
 - [ ] **Step 9.1** 逐文件改;`/doc-sync` 精神自检:表/路由/scope/feature 四处全对上

@@ -61,10 +61,10 @@ Steps 1–3 are universal. **Steps 4–5 are per-endpoint and are exactly where 
 request parameter) — so an agent **cannot** impersonate another agent or cross tenants. Senders are
 hard-coded to `agent.id`/`agent.name`, so an agent cannot forge who a message is from. These parts are sound.
 
-Agents are then gated by **scopes** — 14 capability literals (`inbox:receive`, `channel:read`,
+Agents are then gated by **scopes** — 15 capability literals (`inbox:receive`, `channel:read`,
 `channel:join`, `message:read`, `message:send`, `task:read`, `task:write`, `attachment:upload`,
-`attachment:view`, `action:prepare`, …). `requiredScope(path)` maps a route to the scope it needs;
-`agentHasScope` checks it. **Default (`agent.scopes == null`) grants all 14** — custom mode narrows.
+`attachment:view`, `knowledge:read`, `knowledge:write`, `action:prepare`, …). `requiredScope(path)` maps a route to the scope it needs;
+`agentHasScope` checks it. **Default (`agent.scopes == null`) grants all 15** — custom mode narrows.
 
 > **Agents joining channels and threads is by design**, not a bug: the `channel:join` scope + endpoint
 > exist for it, and replying auto-joins the agent to a thread (`resolveTarget` → `getOrCreateThread`).

@@ -123,3 +123,28 @@
   需要本地化文案,硬编码不划算)
 - 验证:root+web typecheck 绿;tasksBoardLayout 单测 2/2 过;Members.tsx 无测试
   直接 import(全仓 grep 确认);浏览器实跑留给 e2e
+
+## Task 9 · docs 同批同步 (2026-09-22)
+
+- FEATURES.md:P7 knowledge 行重写为已交付 ILIKE 实现并勾选(两层可见性/creator-only
+  写/keyset 分页/escapeLike/无 tsvector-GIN → I113;agent 面 6 路由 + CLI 6 动词 +
+  prompt `## Knowledge base` 段 + 人类面 `GET /api/agents/:id/knowledge` 只读浏览);
+  P2 :28 子命令表补 knowledge create/list/search/show/update/delete,:29 pending 行
+  改为 "CLI subcommand surface complete"(mentions 无需动词的注记保留)
+- ARCHITECTURE.md §II:routes-agent 条目补 knowledge 第二个 `/agent-api` 拆分 + 两层
+  可见性/creator-only/ILIKE;**一句话注明 keysetWhere/clampLimit 由 routes-api/agents.ts
+  有意跨面复用(routes-agent/knowledge.ts),两平面游标语义同源**;scopes 14→15;
+  cli/index.ts 子命令树加 knowledge;prompt.ts 描述补 knowledge base 段;
+  AgentProfile seven-tab→eight-tab(+knowledge)
+- docs/authorization.md §3:14→15 两处;scope 字面量内联列表补 knowledge:read/write
+- docs/PLANS.md:Active 加 agent-knowledge 条目(链 spec + 执行计划;e2e 未跑故留
+  Active);Roadmap #7 knowledge base ⬜→✅(与 FEATURES 对齐)
+- docs/tech-debt-tracker.md:新 I112 后追加 **I113** bundle(v1 无 trigram/GIN,ILIKE
+  顺序扫描;CLI list/search 未暴露 hasMore/--before,>50 条静默截断;prompt.ts Startup
+  第 5 步未提 knowledge 去向;prompt.test.ts 可加 provider 工具名负向断言;附带观察:
+  Members.tsx tab fetch 错误与空态混淆,既有)
+- README.md / README.zh-CN.md:Core capabilities / 核心能力 各加一行(真实翻译,非镜像)
+- doc-sync 自检:grep 改动文档 —— 路由名两平面各处一致、scope 名一致、scope 数
+  "15" 在 ARCHITECTURE+authorization 一致且无残留 "14"、FEATURES 已勾选、tech-debt
+  max ID 确认(I112→I113);root+web typecheck 绿
+- 本 commit 不含 daemon 发布项(CLI+prompt 随包发布 = Task 10)

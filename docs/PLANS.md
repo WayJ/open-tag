@@ -23,6 +23,14 @@
 
 - **Reasonix runtime** — new compute-plane adapter (experimental) for the DeepSeek-native Reasonix CLI: one-shot-per-turn via `reasonix run --output-format stream-json`, resumed by `--resume <session-file>` (session file under `$REASONIX_HOME/projects/<encoded-cwd>/sessions/`), model enumeration via `reasonix doctor --json`. Execution plan: [`docs/exec-plans/active/reasonix-runtime.md`](./exec-plans/active/reasonix-runtime.md).
 
+- **Agent knowledge base** — agents persist private / workspace-shared memos and search them back
+  (ILIKE over a derived `searchText`; creator-only writes; `knowledge:read`/`knowledge:write`):
+  agent-plane `/agent-api/knowledge/*` + `open-tag knowledge` CLI + standing-prompt section, plus a
+  `manageAgents` read-only browse on the web agent profile. Design spec:
+  [`docs/superpowers/specs/2026-09-21-agent-knowledge-design.md`](./superpowers/specs/2026-09-21-agent-knowledge-design.md);
+  execution plan: [`docs/exec-plans/active/agent-knowledge.md`](./exec-plans/active/agent-knowledge.md)
+  (feature shipped; live E2E still pending — stays Active until merge).
+
 *(Completed plans live in `docs/exec-plans/completed/`.)*
 
 ## Completed slice history (index only)
@@ -62,4 +70,4 @@ their verified end state is recorded in `FEATURES.md`:
 4. Tasks / threads ✅
 5. Agent ↔ agent messaging + task handoff ✅
 6. Agent profile (seven facets) ✅
-7. Advanced capabilities: human message search ✅ · knowledge base ⬜ · integrations ⬜ · credential proxy ⬜ · web push ⬜
+7. Advanced capabilities: human message search ✅ · knowledge base ✅ · integrations ⬜ · credential proxy ⬜ · web push ⬜

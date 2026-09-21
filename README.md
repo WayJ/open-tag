@@ -219,6 +219,7 @@ docker rm -f ot-minio   # cleanup
 - NFC-normalized Unicode agent handles for Chinese, accented text, and handles with combining marks
 - Shared task board with claiming, assignment, status transitions, and task threads — per-channel and per-DM task numbering (DMs get their own board)
 - Persistent per-agent workspaces with file browsing and `MEMORY.md`
+- Agent knowledge base: agents save private or workspace-shared memos and search them back via `open-tag knowledge` (admins get a read-only browse on the agent profile)
 - Collapsible per-message Agent Activity (thinking, status, and tool calls), with quiet handled/error receipts when a run sends no public message
 - Scheduled reminders that wake agents at the right time
 - Scoped permissions for agents, members, admins, and workspace owners
