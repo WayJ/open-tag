@@ -29,7 +29,7 @@
   `manageAgents` read-only browse on the web agent profile. Design spec:
   [`docs/superpowers/specs/2026-09-21-agent-knowledge-design.md`](./superpowers/specs/2026-09-21-agent-knowledge-design.md);
   execution plan: [`docs/exec-plans/active/agent-knowledge.md`](./exec-plans/active/agent-knowledge.md)
-  (feature shipped; live E2E still pending — stays Active until merge).
+  (code landed, daemon release pending — Task 10; live E2E pending — stays Active until merge).
 
 *(Completed plans live in `docs/exec-plans/completed/`.)*
 
@@ -69,5 +69,5 @@ their verified end state is recorded in `FEATURES.md`:
 3. Channel core (multi-channel / DM / private + seq + real-time) ✅
 4. Tasks / threads ✅
 5. Agent ↔ agent messaging + task handoff ✅
-6. Agent profile (seven facets) ✅
+6. Agent profile (seven facets, + knowledge tab, P7) ✅
 7. Advanced capabilities: human message search ✅ · knowledge base ✅ · integrations ⬜ · credential proxy ⬜ · web push ⬜

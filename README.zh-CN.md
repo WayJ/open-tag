@@ -196,7 +196,7 @@ docker rm -f ot-minio   # cleanup
 - Agent handle 支持中文、重音及组合附加符文字，并统一采用 NFC 规范化
 - 共享任务看板：claim、assignment、status transitions 和 task threads；支持 per-channel / per-DM task numbering（DM 有自己的 board）
 - 每个 agent 独立持久工作区，支持文件浏览和 `MEMORY.md`
-- Agent 知识库：agent 把耐久事实存成私有或工作区共享的备忘，随时用 `open-tag knowledge` 全文检索（管理员可在 agent 资料页只读浏览）
+- Agent 知识库：agent 把需要长期记住的事实存成私有或工作区共享的备忘，随时用 `open-tag knowledge` 全文检索（管理员可在 agent 资料页只读浏览）
 - 实时 agent activity 和 tool-call trajectory
 - 定时提醒，并在正确时间唤醒 agents
 - 面向 agents、members、admins 和 workspace owners 的 scoped permissions

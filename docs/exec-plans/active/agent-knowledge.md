@@ -27,7 +27,7 @@
 - Modify: `src/db/schema.ts:391-399`(knowledge 表)
 - Modify: `docs/generated/db-schema.md`(knowledge 节)
 
-- [ ] **Step 1.1** 改 `knowledge` 表定义(表当前零行、无端点,改列型安全):
+- [x] **Step 1.1** 改 `knowledge` 表定义(表当前零行、无端点,改列型安全):
 
 ```ts
 export const knowledge = pgTable("knowledge", {
@@ -46,10 +46,10 @@ export const knowledge = pgTable("knowledge", {
 }));
 ```
 
-- [ ] **Step 1.2** `set -a; source .env; set +a; npm run db:push` — 预期 additive 提示(新列+2 索引),确认应用
-- [ ] **Step 1.3** `npm run typecheck` 过
-- [ ] **Step 1.4** `docs/generated/db-schema.md` knowledge 节同步(新列/索引,`agentId` 注 null=shared)
-- [ ] **Step 1.5** Commit:`git add -A && git commit -m "feat(db): knowledge table columns + indexes (createdByAgentId, updatedAt, searchText notNull)"`
+- [x] **Step 1.2** `set -a; source .env; set +a; npm run db:push` — 预期 additive 提示(新列+2 索引),确认应用
+- [x] **Step 1.3** `npm run typecheck` 过
+- [x] **Step 1.4** `docs/generated/db-schema.md` knowledge 节同步(新列/索引,`agentId` 注 null=shared)
+- [x] **Step 1.5** Commit:`git add -A && git commit -m "feat(db): knowledge table columns + indexes (createdByAgentId, updatedAt, searchText notNull)"`
 
 ### Task 2: 纯helper 单元测试先行(TDD)
 
@@ -57,7 +57,7 @@ export const knowledge = pgTable("knowledge", {
 - Create: `src/server/knowledge.ts`(纯函数,无 DB import)
 - Test: `test/knowledge.unit.test.ts`
 
-- [ ] **Step 2.1** 先写失败测试 `test/knowledge.unit.test.ts`(node:test + assert,仿 `test/taskNumber.unit.test.ts` 头部):
+- [x] **Step 2.1** 先写失败测试 `test/knowledge.unit.test.ts`(node:test + assert,仿 `test/taskNumber.unit.test.ts` 头部):
 
 ```ts
 import test from "node:test";
@@ -92,8 +92,8 @@ test("limits: title 200, content 32KB", () => {
 });
 ```
 
-- [ ] **Step 2.2** 跑:`npx tsx --test --test-force-exit test/knowledge.unit.test.ts` → 预期 FAIL(module not found)
-- [ ] **Step 2.3** 建 `src/server/knowledge.ts`:
+- [x] **Step 2.2** 跑:`npx tsx --test --test-force-exit test/knowledge.unit.test.ts` → 预期 FAIL(module not found)
+- [x] **Step 2.3** 建 `src/server/knowledge.ts`:
 
 ```ts
 // Knowledge-base pure helpers (no DB imports — unit-tested in isolation).
@@ -120,8 +120,8 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
 }
 ```
 
-- [ ] **Step 2.4** 跑测试 → PASS(边界断言若与实现差一字,以断言为准修实现)
-- [ ] **Step 2.5** Commit:`feat(server): knowledge pure helpers (searchText/escapeLike/snippet) + unit tests`
+- [x] **Step 2.4** 跑测试 → PASS(边界断言若与实现差一字,以断言为准修实现)
+- [x] **Step 2.5** Commit:`feat(server): knowledge pure helpers (searchText/escapeLike/snippet) + unit tests`
 
 ### Task 3: knowledge:write scope
 
@@ -133,9 +133,9 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
 { key: "knowledge:write", group: "Knowledge", label: "Write knowledge", description: "Create, update, and delete knowledge entries." },
 ```
 
-- [ ] **Step 3.1** 加 scope 行 + 两 locale 键(scope 分组 UI 由 `Members.tsx:563` 从 server catalog 自动分组渲染,无需改组件)
-- [ ] **Step 3.2** `npx tsx --test --test-force-exit test/permissionsSaveError.unit.test.ts`(scope 面相邻测试)+ typecheck 过
-- [ ] **Step 3.3** Commit:`feat(server): knowledge:write scope (14→15) + locale labels`
+- [x] **Step 3.1** 加 scope 行 + 两 locale 键(scope 分组 UI 由 `Members.tsx:563` 从 server catalog 自动分组渲染,无需改组件)
+- [x] **Step 3.2** `npx tsx --test --test-force-exit test/permissionsSaveError.unit.test.ts`(scope 面相邻测试)+ typecheck 过
+- [x] **Step 3.3** Commit:`feat(server): knowledge:write scope (14→15) + locale labels`
 
 ### Task 4: agent 面 6 端点(集成测试先行,TDD)
 
@@ -145,7 +145,7 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
 - Modify: `src/server/core.ts:854`(resolveIdOrPrefix 联合类型加 `| typeof schema.knowledge`)
 - Test: `test/knowledge.integration.ts`
 
-- [ ] **Step 4.1** 先写失败集成测试 `test/knowledge.integration.ts`。模板 = `test/channelArtifacts.integration.ts`(头部注释、`jsonReq`/`makeRes`/`apiCall` 辅助、`agentConfig` 铸 token、setup 建 owner/server/server2/agents A,B/自定义 scope agent)+ `test/agentMigrate.integration.ts` 的人类面 JWT 段。用例(全部 `check()` 断言):
+- [x] **Step 4.1** 先写失败集成测试 `test/knowledge.integration.ts`。模板 = `test/channelArtifacts.integration.ts`(头部注释、`jsonReq`/`makeRes`/`apiCall` 辅助、`agentConfig` 铸 token、setup 建 owner/server/server2/agents A,B/自定义 scope agent)+ `test/agentMigrate.integration.ts` 的人类面 JWT 段。用例(全部 `check()` 断言):
 
   1. create 私有:A `POST /agent-api/knowledge/create {title:"部署约定", content:"prod 用 prod-up.sh…", }` → 200,body 有 id;DB 行 `agentId=A, createdByAgentId=A, searchText="部署约定\n\n<content>"`
   2. create 共享:`{..., shared:true}` → 行 `agentId=null`
@@ -159,8 +159,8 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
   10. scope 门控:custom scopes 无 `knowledge:write` → create/update/delete 403;无 `knowledge:read` → list/search/detail 403
   11. 租户:server2 的 agent list/search → 不见 server1 任何条目(含 shared)
   12. 人类面(段二,JWT+`handleApi`,辅助函数照 agentMigrate 的 `makeReq/makeRes/apiCall`):owner `GET /api/agents/A/knowledge` → A 私有+共享(带 createdByAgentId→handle 映射);普通 member(无 manageAgents)→ 403;`?scope=private|shared` 过滤。**本组在 Task 4 保持 RED,Task 5 实现后转绿**
-- [ ] **Step 4.2** 跑(`set -a; source .env; set +a; npx tsx test/knowledge.integration.ts`)→ 预期 FAIL(404/模块缺)。模板辅助名:agent 面用 channelArtifacts 的 `jsonReq/getReq/mkRes/call`,人类面用 agentMigrate 的 `makeReq/makeRes/apiCall`
-- [ ] **Step 4.3** 建 `src/server/routes-agent/knowledge.ts`(`handleKnowledgeRoutes(req,res,url,method,p,agent,serverId): Promise<boolean>`,逐字仿 artifacts.ts 头注释契约:网关已解析 agent+serverId,`p` 前缀不匹配 return false):
+- [x] **Step 4.2** 跑(`set -a; source .env; set +a; npx tsx test/knowledge.integration.ts`)→ 预期 FAIL(404/模块缺)。模板辅助名:agent 面用 channelArtifacts 的 `jsonReq/getReq/mkRes/call`,人类面用 agentMigrate 的 `makeReq/makeRes/apiCall`
+- [x] **Step 4.3** 建 `src/server/routes-agent/knowledge.ts`(`handleKnowledgeRoutes(req,res,url,method,p,agent,serverId): Promise<boolean>`,逐字仿 artifacts.ts 头注释契约:网关已解析 agent+serverId,`p` 前缀不匹配 return false):
 
   - `POST /agent-api/knowledge/create`:body `{title, content, shared?}`;trim title 非空 ≤200,content 非空 ≤32KB(超限 400 带 limit 数);insert `{serverId, agentId: shared? null : agent.id, createdByAgentId: agent.id, title, content, searchText: buildSearchText(...)};` 回 `{ok:true, id, shared:!!shared, createdAt}`
   - `GET /agent-api/knowledge/list`:scope∈mine|shared|all(默认 all);可见域 = mine:`agentId=agent.id` / shared:`agentId is null` / all:or 两支(and 包 serverId);select **不含 content**(id,title,agentId,createdByAgentId,createdAt,updatedAt + 派生 `mine`/`shared`);`orderBy(desc(createdAt), desc(id))`,`limit+1` 哨兵出 `hasMore`;`before=<id>` keyset:先查该行 (createdAt,id),再 `or(lt(createdAt,c), and(eq(createdAt,c), lt(id,i)))`;limit clamp 1..50
@@ -169,7 +169,7 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
   - `PATCH /agent-api/knowledge/update`:body `{id, title?, content?}`;resolve + `createdByAgentId === agent.id` 否则 404;title/content 给了才校验+更新;`searchText: buildSearchText(新title, 新content)`(用合并后值)、`updatedAt: new Date()`;回 `{ok:true, id, updatedAt}`
   - `DELETE /agent-api/knowledge/delete?id=`:resolve + creator-only;硬删;回 `{ok:true, id}`
   - import:`and, or, eq, ne, gt, lt, ilike, isNull, desc` + db/schema + `sendJson, sendErr, isUuid`(util)+ `resolveIdOrPrefix`(core)+ 本文件 helper —— 从本文件(在 `routes-agent/` 子目录)引 `src/server/knowledge.ts` 用 `../knowledge.js`(同 `../util.js` 先例;`../../` 只用于跨出 server 目录如 `../../db/index.js`)
-- [ ] **Step 4.4** `routes-agent.ts` 接线(import 行 + requiredScope 三行 + mount 一行):
+- [x] **Step 4.4** `routes-agent.ts` 接线(import 行 + requiredScope 三行 + mount 一行):
 
 ```ts
 if (p === "/agent-api/knowledge/create" || p === "/agent-api/knowledge/update" || p === "/agent-api/knowledge/delete") return "knowledge:write";
@@ -178,9 +178,9 @@ if (p.startsWith("/agent-api/knowledge/")) return "knowledge:read";
 if (await handleKnowledgeRoutes(req, res, url, method, p, agent, serverId)) return true;
 ```
 
-- [ ] **Step 4.5** `core.ts` resolveIdOrPrefix 参数类型:`typeof schema.messages | typeof schema.attachments | typeof schema.knowledge`(实现零改动——三种表都有 id/serverId)
-- [ ] **Step 4.6** 跑集成 → **用例 1-11 全 PASS;用例 12(人类面)按设计仍 RED**;`npm run typecheck` 过
-- [ ] **Step 4.7** Commit:`feat(server): /agent-api/knowledge/* — create/list/search/detail/update/delete (two-tier visibility, creator-only writes)`
+- [x] **Step 4.5** `core.ts` resolveIdOrPrefix 参数类型:`typeof schema.messages | typeof schema.attachments | typeof schema.knowledge`(实现零改动——三种表都有 id/serverId)
+- [x] **Step 4.6** 跑集成 → **用例 1-11 全 PASS;用例 12(人类面)按设计仍 RED**;`npm run typecheck` 过
+- [x] **Step 4.7** Commit:`feat(server): /agent-api/knowledge/* — create/list/search/detail/update/delete (two-tier visibility, creator-only writes)`
 
 ### Task 5: 人类面只读端点
 
@@ -188,16 +188,16 @@ if (await handleKnowledgeRoutes(req, res, url, method, p, agent, serverId)) retu
 - Modify: `src/server/routes-api/agents.ts`(仿文件内既有 per-agent GET 路由 + requireCap("manageAgents") 先例)
 - Test: `test/knowledge.integration.ts` 段二已在 Task 4 写好(先失败后实现——本 task 即实现)
 
-- [ ] **Step 5.1** `GET /api/agents/:id/knowledge?scope=private|shared|all&limit=&before=`:agent 存在且本 server(404 否则);requireCap manageAgents(403);返回该 agent 私有(`agentId=:id`)+ 共享(`agentId is null`)行,含 content(管理员只读浏览,≤50/页),每行 `createdBy`(createdByAgentId → agents.name 映射,batch inArray 一次查);同款 keyset 分页
-- [ ] **Step 5.2** 跑集成(含人类面 12 号用例)→ PASS;typecheck 过
-- [ ] **Step 5.3** Commit:`feat(server): GET /api/agents/:id/knowledge — admin read-only knowledge browse`
+- [x] **Step 5.1** `GET /api/agents/:id/knowledge?scope=private|shared|all&limit=&before=`:agent 存在且本 server(404 否则);requireCap manageAgents(403);返回该 agent 私有(`agentId=:id`)+ 共享(`agentId is null`)行,含 content(管理员只读浏览,≤50/页),每行 `createdBy`(createdByAgentId → agents.name 映射,batch inArray 一次查);同款 keyset 分页
+- [x] **Step 5.2** 跑集成(含人类面 12 号用例)→ PASS;typecheck 过
+- [x] **Step 5.3** Commit:`feat(server): GET /api/agents/:id/knowledge — admin read-only knowledge browse`
 
 ### Task 6: CLI 6 子命令
 
 **Files:**
 - Modify: `src/cli/index.ts`(artifact 组 :138-164 旁加 knowledge 组;`api()`/stdin 读法照抄文件内既有用法 — message send 的 stdin 读、artifact list 的 GET 形态)
 
-- [ ] **Step 6.1** 加命令组(stdout 输出仿 artifact/task 风格,英文文案):
+- [x] **Step 6.1** 加命令组(stdout 输出仿 artifact/task 风格,英文文案):
 
 ```ts
 const knowledge = program.command("knowledge").description("knowledge base (searchable facts; private by default, --shared for all agents)");
@@ -209,8 +209,8 @@ knowledge.command("update").description("update title/content of an entry you cr
 knowledge.command("delete").description("delete an entry you created").requiredOption("--id <id>").action(/* DELETE delete */);
 ```
 
-- [ ] **Step 6.2** `npx tsx src/cli/index.ts knowledge --help` 六子命令齐;`npx tsx --test --test-force-exit test/cliMime.unit.test.ts` 过(CLI 面相邻)
-- [ ] **Step 6.3** Commit:`feat(cli): open-tag knowledge create/list/search/show/update/delete`
+- [x] **Step 6.2** `npx tsx src/cli/index.ts knowledge --help` 六子命令齐;`npx tsx --test --test-force-exit test/cliMime.unit.test.ts` 过(CLI 面相邻)
+- [x] **Step 6.3** Commit:`feat(cli): open-tag knowledge create/list/search/show/update/delete`
 
 ### Task 7: 常驻提示一段(TDD 断言先行)
 
@@ -218,7 +218,7 @@ knowledge.command("delete").description("delete an entry you created").requiredO
 - Modify: `src/daemon/prompt.ts`(L123 notes 段后、L125 Compaction safety 前插 `## Knowledge base` 段)
 - Test: `src/daemon/prompt.test.ts`(加断言)
 
-- [ ] **Step 7.1** 先在 `prompt.test.ts` 加:
+- [x] **Step 7.1** 先在 `prompt.test.ts` 加:
 
 ```ts
 test("knowledge base section teaches create/search and the notes/ split", () => {
@@ -229,8 +229,8 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 });
 ```
 
-- [ ] **Step 7.2** 跑 `npx tsx --test --test-force-exit src/daemon/prompt.test.ts` → FAIL
-- [ ] **Step 7.3** prompt.ts 插段(runtime 无关,零 provider 工具名):
+- [x] **Step 7.2** 跑 `npx tsx --test --test-force-exit src/daemon/prompt.test.ts` → FAIL
+- [x] **Step 7.3** prompt.ts 插段(runtime 无关,零 provider 工具名):
 
 ````
 ## Knowledge base
@@ -241,8 +241,8 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - Local `${c.stateDir}/notes/` files and the knowledge base are complementary: notes hold working context; knowledge holds durable searchable facts.
 ````
 
-- [ ] **Step 7.4** 跑 → PASS;红线 grep:新增段无 `Read|cat|grep|ls` 等工具名
-- [ ] **Step 7.5** Commit:`feat(daemon): standing prompt Knowledge base section`
+- [x] **Step 7.4** 跑 → PASS;红线 grep:新增段无 `Read|cat|grep|ls` 等工具名
+- [x] **Step 7.5** Commit:`feat(daemon): standing prompt Knowledge base section`
 
 ### Task 8: web Knowledge tab
 
@@ -250,8 +250,8 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - Modify: `web/src/views/Members.tsx`(tab 数组 :262-270 加 `["knowledge", t("members.tabKnowledge")]` —— **filter 同 dms:`k !== "knowledge" || capabilities.manageAgents`**,后端对非管理员 403,不门控会开出错误 tab;:274-279 分支加 `KnowledgeTab`;新组件 `KnowledgeTab` 放本文件,仿 `RemindersTab`(:617)的取数+列表形态:fetch `GET /api/agents/:id/knowledge`,私有/共享两组,行 = title + 创建者 + 时间,点击展开 content(行内 `<pre>` 折叠),空态文案)
 - Modify: `web/src/locales/en.json` + `zh.json`(`members.tabKnowledge`: "Knowledge"/"知识库" + 组标签/空态/创建者字段名等 ≤6 键;**creator 为 null 渲染 "(未知)" 类兜底,不假设非空**——软删 agent 名仍可解析,硬删无路径但别崩)
 
-- [ ] **Step 8.1** 组件 + tab + locale 键;`npm run typecheck` 过
-- [ ] **Step 8.2** Commit:`feat(web): agent profile Knowledge tab (admin read-only browse)`
+- [x] **Step 8.1** 组件 + tab + locale 键;`npm run typecheck` 过
+- [x] **Step 8.2** Commit:`feat(web): agent profile Knowledge tab (admin read-only browse)`
 
 ### Task 9: docs 同批同步
 
@@ -263,8 +263,8 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - Modify: `docs/tech-debt-tracker.md`(新 I 条目:v1 无 trigram/索引,ILIKE 顺序扫描,量大再补;同条注记:CLI list/search 未暴露 hasMore/--before,>50 条静默截断;prompt.ts Startup sequence 第 5 步未同步 knowledge 去向提示;prompt.test.ts 可加 provider 工具名负向断言把红线机械化)
 - Modify: `README.md` / `README.zh-CN.md`(各 "Core capabilities"/"项目状态" 节加一行——两文件同批)
 
-- [ ] **Step 9.1** 逐文件改;`/doc-sync` 精神自检:表/路由/scope/feature 四处全对上
-- [ ] **Step 9.2** Commit:`docs: knowledge base sync (FEATURES/ARCHITECTURE/PLANS/tech-debt/README)`
+- [x] **Step 9.1** 逐文件改;`/doc-sync` 精神自检:表/路由/scope/feature 四处全对上
+- [x] **Step 9.2** Commit:`docs: knowledge base sync (FEATURES/ARCHITECTURE/PLANS/tech-debt/README)`
 
 ### Task 10: 发版准备(不发布)
 
