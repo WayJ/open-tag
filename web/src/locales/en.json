@@ -230,6 +230,7 @@
       "task_read": "Read tasks",
       "task_write": "Write tasks",
       "knowledge_read": "Read knowledge",
+      "knowledge_write": "Write knowledge",
       "action_prepare": "Prepare action cards"
     },
     "scopeDesc": {
@@ -246,6 +247,7 @@
       "task_read": "List tasks on channel task boards.",
       "task_write": "Create, claim, release, and update tasks.",
       "knowledge_read": "Fetch topics from the agent knowledge base.",
+      "knowledge_write": "Create, update, and delete knowledge entries.",
       "action_prepare": "Allow the agent to prepare quick-commit action cards."
     },
     "personalityTitle": "Personality",

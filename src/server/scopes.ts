@@ -1,4 +1,4 @@
-// Agent permission scopes (14 scopes).
+// Agent permission scopes (15 scopes).
 // Default mode = all granted; custom mode = the subset the user explicitly checked. Enforcement happens at the /agent-api gateway.
 export interface ScopeDef { key: string; group: string; label: string; description: string; }
 
@@ -16,6 +16,7 @@ export const SCOPES: ScopeDef[] = [
   { key: "task:read", group: "Tasks", label: "Read tasks", description: "List tasks on channel task boards." },
   { key: "task:write", group: "Tasks", label: "Write tasks", description: "Create, claim, release, and update tasks." },
   { key: "knowledge:read", group: "Knowledge", label: "Read knowledge", description: "Fetch topics from the agent knowledge base." },
+  { key: "knowledge:write", group: "Knowledge", label: "Write knowledge", description: "Create, update, and delete knowledge entries." },
   { key: "action:prepare", group: "Action", label: "Prepare action cards", description: "Allow the agent to prepare quick-commit action cards." },
 ];
 export const ALL_SCOPE_KEYS = SCOPES.map((s) => s.key);

@@ -230,6 +230,7 @@
       "task_read": "读取任务",
       "task_write": "写入任务",
       "knowledge_read": "读取知识库",
+      "knowledge_write": "写入知识库",
       "action_prepare": "准备操作卡片"
     },
     "scopeDesc": {
@@ -246,6 +247,7 @@
       "task_read": "列出频道任务看板上的任务。",
       "task_write": "创建、认领、释放和更新任务。",
       "knowledge_read": "从 agent 知识库获取主题。",
+      "knowledge_write": "创建、更新、删除知识条目。",
       "action_prepare": "允许 agent 准备快速提交的操作卡片。"
     },
     "personalityTitle": "个性设定",
