@@ -650,7 +650,7 @@ function KnowledgeTab({ id }: { id: string }) {
   const group = (label: string, list: any[]) => list.length === 0 ? null : <>
     <div className="sec">{label} <span className="cnt">{list.length}</span></div>
     {list.map((e) => (
-      <div className="card card-link" key={e.id} role="button" tabIndex={0} onClick={() => toggle(e.id)}
+      <div className="card card-link" key={e.id} role="button" tabIndex={0} aria-expanded={openId === e.id} onClick={() => toggle(e.id)}
         onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e.id); } }}>
         <div className="who">{e.title}<span className="meta"> · {t("members.knowledgeCreatedBy", { name: e.createdBy || t("members.knowledgeUnknownCreator") })} · {fmtDateTime(e.createdAt)}</span></div>
         {openId === e.id && <pre className="ws-content" style={{ marginTop: 6 }}>{e.content}</pre>}
