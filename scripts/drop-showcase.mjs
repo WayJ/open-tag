@@ -94,9 +94,11 @@ async function main() {
     }
 
     // 2. Drop every system-seeded prop agent (no longer produced once the showcase is static).
-    //    Clear its knowledge rows first — knowledge.agent_id is the only FK onto agents.id, so a stray row
-    //    (prop agents never run, so in practice they have none) would otherwise roll the whole migration back.
-    await tx`DELETE FROM knowledge WHERE agent_id IN (SELECT id FROM agents WHERE creator_type = 'system')`;
+    //    Clear its knowledge rows first — knowledge.agent_id and knowledge.created_by_agent_id both FK onto
+    //    agents.id, so a stray row under either (prop agents never run, so in practice they have none) would
+    //    otherwise roll the whole migration back.
+    await tx`DELETE FROM knowledge WHERE agent_id IN (SELECT id FROM agents WHERE creator_type = 'system')
+      OR created_by_agent_id IN (SELECT id FROM agents WHERE creator_type = 'system')`;
     counts.agents = (await tx`DELETE FROM agents WHERE creator_type = 'system'`).count;
   });
 
