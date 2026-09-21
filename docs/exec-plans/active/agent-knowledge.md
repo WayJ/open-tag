@@ -126,7 +126,7 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
 ### Task 3: knowledge:write scope
 
 **Files:**
-- Modify: `src/server/scopes.ts:18`(knowledge:read 后插一行)
+- Modify: `src/server/scopes.ts:18`(knowledge:read 后插一行;**文件头注释 "(14 scopes)" 同步改 15**)
 - Modify: `web/src/locales/en.json` + `web/src/locales/zh.json`(scopeLabels/scopeDesc `knowledge_write`,两处文件 ~L232/~L248 同款 snake_case 键;zh 文案:"写入知识库" / "创建、更新、删除知识条目。")
 
 ```ts
@@ -158,17 +158,17 @@ export function makeSnippet(content: string, q: string, radius = 60): string {
   9. delete:creator 删自己 → list 无此条;B 删 A 的 → 404
   10. scope 门控:custom scopes 无 `knowledge:write` → create/update/delete 403;无 `knowledge:read` → list/search/detail 403
   11. 租户:server2 的 agent list/search → 不见 server1 任何条目(含 shared)
-  12. 人类面(段二,JWT+`handleApi`):owner `GET /api/agents/A/knowledge` → A 私有+共享(带 createdByAgentId→handle 映射);普通 member(无 manageAgents)→ 403;`?scope=private|shared` 过滤
-- [ ] **Step 4.2** 跑(`set -a; source .env; set +a; npx tsx test/knowledge.integration.ts`)→ 预期 FAIL(404/模块缺)
+  12. 人类面(段二,JWT+`handleApi`,辅助函数照 agentMigrate 的 `makeReq/makeRes/apiCall`):owner `GET /api/agents/A/knowledge` → A 私有+共享(带 createdByAgentId→handle 映射);普通 member(无 manageAgents)→ 403;`?scope=private|shared` 过滤。**本组在 Task 4 保持 RED,Task 5 实现后转绿**
+- [ ] **Step 4.2** 跑(`set -a; source .env; set +a; npx tsx test/knowledge.integration.ts`)→ 预期 FAIL(404/模块缺)。模板辅助名:agent 面用 channelArtifacts 的 `jsonReq/getReq/mkRes/call`,人类面用 agentMigrate 的 `makeReq/makeRes/apiCall`
 - [ ] **Step 4.3** 建 `src/server/routes-agent/knowledge.ts`(`handleKnowledgeRoutes(req,res,url,method,p,agent,serverId): Promise<boolean>`,逐字仿 artifacts.ts 头注释契约:网关已解析 agent+serverId,`p` 前缀不匹配 return false):
 
   - `POST /agent-api/knowledge/create`:body `{title, content, shared?}`;trim title 非空 ≤200,content 非空 ≤32KB(超限 400 带 limit 数);insert `{serverId, agentId: shared? null : agent.id, createdByAgentId: agent.id, title, content, searchText: buildSearchText(...)};` 回 `{ok:true, id, shared:!!shared, createdAt}`
   - `GET /agent-api/knowledge/list`:scope∈mine|shared|all(默认 all);可见域 = mine:`agentId=agent.id` / shared:`agentId is null` / all:or 两支(and 包 serverId);select **不含 content**(id,title,agentId,createdByAgentId,createdAt,updatedAt + 派生 `mine`/`shared`);`orderBy(desc(createdAt), desc(id))`,`limit+1` 哨兵出 `hasMore`;`before=<id>` keyset:先查该行 (createdAt,id),再 `or(lt(createdAt,c), and(eq(createdAt,c), lt(id,i)))`;limit clamp 1..50
-  - `GET /agent-api/knowledge/search`:q 必填非空;`ilike(schema.knowledge.searchText, "%"+escapeLike(q)+"%")` + 可见域(all 固定——搜自己+共享)+ serverId;select id,title,snippet(sql 不算,取 content 后 makeSnippet(content,q) 在 JS 侧生成,同 messages.ts:105 先例),shared,mine,createdAt;同款 keyset+hasMore
+  - `GET /agent-api/knowledge/search`:q 必填非空;`ilike(schema.knowledge.searchText, "%"+escapeLike(q)+"%")` + 可见域(all 固定——搜自己+共享)+ serverId;select id,title,snippet(sql 不算,取 content 后 makeSnippet(content,q) 在 JS 侧生成,同 `src/server/routes-api/messages.ts:105` 先例),shared,mine,createdAt;同款 keyset+hasMore
   - `GET /agent-api/knowledge/detail?id=`:`resolveIdOrPrefix(schema.knowledge, serverId, id)`;null 或 不可见(非 owner 私有)→ 404;回全字段含 content
   - `PATCH /agent-api/knowledge/update`:body `{id, title?, content?}`;resolve + `createdByAgentId === agent.id` 否则 404;title/content 给了才校验+更新;`searchText: buildSearchText(新title, 新content)`(用合并后值)、`updatedAt: new Date()`;回 `{ok:true, id, updatedAt}`
   - `DELETE /agent-api/knowledge/delete?id=`:resolve + creator-only;硬删;回 `{ok:true, id}`
-  - import:`and, or, eq, ne, gt, lt, ilike, isNull, desc` + db/schema + `sendJson, sendErr, isUuid`(util)+ `resolveIdOrPrefix`(core)+ 本文件 helper(`../knowledge.js` 相对路径 `../../knowledge.js` — 注意本文件在 routes-agent/ 子目录)
+  - import:`and, or, eq, ne, gt, lt, ilike, isNull, desc` + db/schema + `sendJson, sendErr, isUuid`(util)+ `resolveIdOrPrefix`(core)+ 本文件 helper —— 从本文件(在 `routes-agent/` 子目录)引 `src/server/knowledge.ts` 用 `../knowledge.js`(同 `../util.js` 先例;`../../` 只用于跨出 server 目录如 `../../db/index.js`)
 - [ ] **Step 4.4** `routes-agent.ts` 接线(import 行 + requiredScope 三行 + mount 一行):
 
 ```ts
@@ -179,7 +179,7 @@ if (await handleKnowledgeRoutes(req, res, url, method, p, agent, serverId)) retu
 ```
 
 - [ ] **Step 4.5** `core.ts` resolveIdOrPrefix 参数类型:`typeof schema.messages | typeof schema.attachments | typeof schema.knowledge`(实现零改动——三种表都有 id/serverId)
-- [ ] **Step 4.6** 跑集成 → 全 PASS;`npm run typecheck` 过
+- [ ] **Step 4.6** 跑集成 → **用例 1-11 全 PASS;用例 12(人类面)按设计仍 RED**;`npm run typecheck` 过
 - [ ] **Step 4.7** Commit:`feat(server): /agent-api/knowledge/* — create/list/search/detail/update/delete (two-tier visibility, creator-only writes)`
 
 ### Task 5: 人类面只读端点
@@ -247,7 +247,7 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 ### Task 8: web Knowledge tab
 
 **Files:**
-- Modify: `web/src/views/Members.tsx`(tab 数组 :262-270 加 `["knowledge", t("members.tabKnowledge")]`;:274-279 分支加 `KnowledgeTab`;新组件 `KnowledgeTab` 放本文件,仿 `RemindersTab` 的取数+列表形态:fetch `GET /api/agents/:id/knowledge`,私有/共享两组,行 = title + 创建者 + 时间,点击展开 content(行内 `<pre>` 折叠),空态文案)
+- Modify: `web/src/views/Members.tsx`(tab 数组 :262-270 加 `["knowledge", t("members.tabKnowledge")]` —— **filter 同 dms:`k !== "knowledge" || capabilities.manageAgents`**,后端对非管理员 403,不门控会开出错误 tab;:274-279 分支加 `KnowledgeTab`;新组件 `KnowledgeTab` 放本文件,仿 `RemindersTab`(:617)的取数+列表形态:fetch `GET /api/agents/:id/knowledge`,私有/共享两组,行 = title + 创建者 + 时间,点击展开 content(行内 `<pre>` 折叠),空态文案)
 - Modify: `web/src/locales/en.json` + `zh.json`(`members.tabKnowledge`: "Knowledge"/"知识库" + 组标签/空态/创建者字段名等 ≤6 键)
 
 - [ ] **Step 8.1** 组件 + tab + locale 键;`npm run typecheck` 过
@@ -260,7 +260,7 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - Modify: `ARCHITECTURE.md` §II(agent-api 路由表 + CLI 子命令 + scopes 15)
 - Modify: `docs/PLANS.md`(Active 加 agent-knowledge 条目链 spec+本计划)
 - Modify: `docs/tech-debt-tracker.md`(新 I 条目:v1 无 trigram/索引,ILIKE 顺序扫描,量大再补)
-- Modify: `README.md` / `README.zh-CN.md`(Verified 节若列功能面则各加一行——两文件同批)
+- Modify: `README.md` / `README.zh-CN.md`(各 "Core capabilities"/"项目状态" 节加一行——两文件同批)
 
 - [ ] **Step 9.1** 逐文件改;`/doc-sync` 精神自检:表/路由/scope/feature 四处全对上
 - [ ] **Step 9.2** Commit:`docs: knowledge base sync (FEATURES/ARCHITECTURE/PLANS/tech-debt/README)`
@@ -279,7 +279,7 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - [ ] **Step 11.1** 全量单元:`npx tsx --test --test-force-exit test/*.unit.test.ts src/daemon/*.test.ts web/src/views/*.test.ts` → 全绿
 - [ ] **Step 11.2** 集成顺序跑(I97:DB-backed 不并行):knowledge + channelArtifacts + agentMigrate + taskAssignAgent → 全绿
 - [ ] **Step 11.3** `npm run dev:e2e:up`(worktree 内;需 claude CLI 已登录)→ 记下打印的 dev-login URL
-- [ ] **Step 11.4** 浏览器(Playwright/chrome-devtools MCP)实跑:dev-login → @dev-bot DM 或 #all 发 "用 open-tag knowledge create 存一条知识:title '团队约定' content '周三发布窗口',再 search '发布' 告诉我结果" → agent 真跑 CLI → 回复含命中;截图存 `.shots/`
+- [ ] **Step 11.4** 浏览器(Playwright/chrome-devtools MCP)实跑:dev-login → @dev-bot DM 或 #all 发:"用 open-tag knowledge:create 一条私有(title '团队约定',content '周三发布窗口,禁直推 main');再 create 一条 --shared(title '工作区词汇',content '数据库设计稿放 artifacts');然后 search '发布' 和 search '数据库' 各一次;update 团队约定那条的 content 追加 '变更需两人评审';最后 list 给我看全表" → agent 真跑 CLI → 回复含两次命中+列表;截图存 `.shots/`(create 私有/共享 + search CJK + update + list 全覆盖)
 - [ ] **Step 11.5** 浏览器:agent Profile → Knowledge tab 显示该条(截图 `.shots/`)
 - [ ] **Step 11.6** `npm run dev:e2e:down`
 - [ ] **Step 11.7** 更新 `.agents/notes/2026-09-21-agent-knowledge.md` 开发日志(证据链接);Commit:`test: knowledge e2e evidence + dev log`

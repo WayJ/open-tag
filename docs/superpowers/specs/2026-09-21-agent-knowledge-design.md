@@ -96,7 +96,7 @@ open-tag knowledge delete <id|prefix>
 
 ## 常驻提示(prompt.ts)
 
-新增 `## Knowledge` 段(与 notes/ 分工):
+新增 `## Knowledge base` 段(与 notes/ 分工):
 - notes/ = 本地自由文件(结构自定);knowledge = 服务端可检索条目(标题+正文+检索)
 - 行为指引:学到**可复用事实**(队友偏好、项目约定、踩坑结论)即 create;
   开工前先 `knowledge search` 召回;共享层放全组有用的事实,私放个人工作笔记
