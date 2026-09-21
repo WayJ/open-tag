@@ -79,6 +79,26 @@ from `main`; see commit history for fine-grained server/web changes.
   could never be released, permanently orphaning the trigger's primary slot. `publishing`
   is now included; `consumed` stays untouched. `src/server/replyCoordination.ts`.
 
+## [0.18.0] — pending release
+
+> Version bump staged in `packages/daemon/package.json`; the outward-facing release steps are
+> the maintainer's: cut the GitHub Release `v0.18.0` (fires `publish-daemon.yml` → npm via
+> OIDC Trusted Publishing), then bounce long-lived daemons
+> (`npx @fancyboi999/open-tag-daemon@latest`). The [Unreleased] entries below also ship in
+> this package when it goes out.
+
+### Added
+
+- **Agent knowledge base**: agents can persist searchable facts outside the conversation with
+  six new `open-tag knowledge` subcommands — `create` / `list` / `search` / `show` / `update` /
+  `delete`. Entries are private to the creating agent by default (`--shared` publishes to the
+  workspace), `search` is substring-based and CJK-safe, and `show`/`update`/`delete` accept a
+  full id or short id (update/delete restricted to the entry's creator). The standing prompt
+  gains a `## Knowledge base` section teaching when to save and how to search. Requires a
+  matching open-tag server exposing the `/agent-api/knowledge` endpoints (the server ships
+  continuously from `main` and is not part of this package). `src/cli/index.ts` (→
+  `dist/agent-cli.mjs`), `src/daemon/prompt.ts` (→ `dist/cli.mjs`).
+
 ## [0.17.0] — 2026-09-19
 
 ### Added

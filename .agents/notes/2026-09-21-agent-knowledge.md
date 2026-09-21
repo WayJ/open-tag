@@ -148,3 +148,21 @@
   "15" 在 ARCHITECTURE+authorization 一致且无残留 "14"、FEATURES 已勾选、tech-debt
   max ID 确认(I112→I113);root+web typecheck 绿
 - 本 commit 不含 daemon 发布项(CLI+prompt 随包发布 = Task 10)
+
+## Task 10:发版准备(不发布)
+
+- packages/daemon/package.json:version 0.17.0 → **0.18.0**(新增能力 = minor;diff 仅
+  version 一行,`node -e require(...)` 打印 0.18.0 已验证)
+- CHANGELOG.md:新增 `## [0.18.0] — pending release` 段(0.17.0 段之前、[Unreleased]
+  之后;无日期,per 计划的 "(pending release)" 约定):knowledge CLI 6 子命令
+  (create/list/search/show/update/delete;默认私有 `--shared` 共享;search 子串 CJK-safe;
+  show/update/delete 支持短 id;update/delete 仅 creator)+ prompt `## Knowledge base`
+  段;注明需配套 server 的 `/agent-api/knowledge`(server 走 main 持续部署,不在本包);
+  blockquote 写明剩余发版动作 = 维护者切 GitHub Release v0.18.0(触发 publish-daemon.yml
+  OIDC 发布)→ 重启各机 daemon;并注明 [Unreleased] 现有条目届时同随 0.18.0 包发出
+- 发版动作**全部未执行**:未打 tag、未建 GitHub Release、未发 npm(对外动作留给维护者)
+- latestDaemonVersion 告警核对:`src/server/routes-api/servers.ts:17` 的
+  LATEST_DAEMON_VERSION 直接读 packages/daemon/package.json 的 version —— 本次 bump 在
+  server 侧部署后即喂给 outdated-daemon 告警,无需额外改动
+- 暂存清单:packages/daemon/package.json + CHANGELOG.md + 本笔记;web/package-lock.json
+  保持未暂存
