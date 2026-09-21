@@ -188,7 +188,7 @@ knowledge.command("list").description("list knowledge entries").option("--mine",
 knowledge.command("search").description("search knowledge (substring, CJK-safe)").requiredOption("--query <q>", "search term").action(async (opts) => {
   const d = await api("GET", `/agent-api/knowledge/search?q=${encodeURIComponent(opts.query)}`);
   if (!d.results?.length) return console.log("No matches.");
-  for (const r of d.results) console.log(`  ${r.id}  ${r.shared ? "S" : "P"}  ${r.title} — ${String(r.snippet).replace(/\s+/g, " ")}`);
+  for (const r of d.results) console.log(`  ${r.id}  ${r.shared ? "S" : "P"}  ${String(r.title).replace(/\s+/g, " ")} — ${String(r.snippet).replace(/\s+/g, " ")}`);
 });
 knowledge.command("show").description("show one entry (full id or short id)").requiredOption("--id <id>").action(async (opts) => {
   const d = await api("GET", `/agent-api/knowledge/detail?id=${encodeURIComponent(opts.id)}`);
