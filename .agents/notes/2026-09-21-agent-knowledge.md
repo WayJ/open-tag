@@ -166,3 +166,24 @@
   server 侧部署后即喂给 outdated-daemon 告警,无需额外改动
 - 暂存清单:packages/daemon/package.json + CHANGELOG.md + 本笔记;web/package-lock.json
   保持未暂存
+
+## Task 11 · 全量回归 + 实跑 E2E(2026-09-22)
+
+- 全量单元(CI 同款 + CI env):**699 pass / 0 fail / 3 skipped**(702 tests)
+  — 注:`mimeXssGuard` 单文件裸跑缺 `JWT_SECRET` 会挂,CI 里显式给 env(`ci.yml:43`),
+  非本次回归
+- 集成顺序跑 4 套全绿:knowledge(66/66)、channelArtifacts、agentMigrate、
+  taskAssignAgent——**taskAssignAgent 预先就坏在 origin/main**(import `agentConfig`
+  自 core.ts,该导出早已移至 agentConfig.ts),一行修(44a590b),非本次回归
+- dev:e2e 实跑(worktree 栈 :7801,docs-site 依赖补装后起栈):
+  - @dev-bot 真跑 `open-tag knowledge` 五步闭环:create 私有(e0fe2736,P)、
+    create --shared(745c670a,S)、search「发布」/「数据库」各命中 1 条(CJK 子串)、
+    update 用**短 id** `e0fe2736` 追加内容成功、list 出 S/P 两行
+  - agent 自纠两处:search 裸调用缺 `--query` 被拒后重试;decision 首提
+    REPLY_SLOT_TAKEN 后经协调发布
+  - Profile Knowledge tab:Private(1)+Shared(1) 分组、by dev-bot + 时间、
+    展开显示 update 后全文(`[expanded]` aria 生效)
+  - 截图:`.shots/2026-09-22-knowledge-e2e-channel.png`、
+    `.shots/2026-09-22-knowledge-e2e-profile-tab.png`(gitignored,PR 文字引用)
+- dev:e2e:down 干净收栈(stopped server + daemon)
+- 未做(留给 maintainer):GitHub Release v0.18.0 / npm 发布 / 机上 bounce(外发动作)

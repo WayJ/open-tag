@@ -272,19 +272,19 @@ test("knowledge base section teaches create/search and the notes/ split", () => 
 - Modify: `packages/daemon/package.json`(version minor +1,先看现值)
 - Modify: `CHANGELOG.md`(该版本条目:knowledge CLI 6 子命令 + prompt Knowledge 段;发版动作说明)
 
-- [ ] **Step 10.1** bump + CHANGELOG 条目
-- [ ] **Step 10.2** Commit:`chore(release): daemon <版本> — knowledge CLI + prompt (unreleased)`
+- [x] **Step - [x] **Step 10.1** bump + CHANGELOG 条目
+- [x] **Step - [x] **Step 10.2** Commit:`chore(release): daemon <版本> — knowledge CLI + prompt (unreleased)`
 
 ### Task 11: 全量回归 + 实跑 E2E
 
-- [ ] **Step 11.1** 全量单元:`npx tsx --test --test-force-exit test/*.unit.test.ts src/daemon/*.test.ts web/src/views/*.test.ts` → 全绿
-- [ ] **Step 11.2** 集成顺序跑(I97:DB-backed 不并行):knowledge + channelArtifacts + agentMigrate + taskAssignAgent → 全绿
-- [ ] **Step 11.3** `npm run dev:e2e:up`(worktree 内;需 claude CLI 已登录)→ 记下打印的 dev-login URL
-- [ ] **Step 11.4** 浏览器(Playwright/chrome-devtools MCP)实跑:dev-login → @dev-bot DM 或 #all 发:"用 open-tag knowledge:create 一条私有(title '团队约定',content '周三发布窗口,禁直推 main');再 create 一条 --shared(title '工作区词汇',content '数据库设计稿放 artifacts');然后 search '发布' 和 search '数据库' 各一次;update 团队约定那条的 content 追加 '变更需两人评审';最后 list 给我看全表" → agent 真跑 CLI → 回复含两次命中+列表;截图存 `.shots/`(create 私有/共享 + search CJK + update + list 全覆盖)
-- [ ] **Step 11.5** 浏览器:agent Profile → Knowledge tab 显示该条(截图 `.shots/`)
-- [ ] **Step 11.6** `npm run dev:e2e:down`
-- [ ] **Step 11.7** 更新 `.agents/notes/2026-09-21-agent-knowledge.md` 开发日志(证据链接);Commit:`test: knowledge e2e evidence + dev log`
-- [ ] **Step 11.8** push 分支 + 开 PR(标题 `feat: agent knowledge base (P7)`;正文含 spec/计划链接 + 证据清单 + "daemon publish pending maintainer release")。**不建 GitHub Release、不发 npm** — 发版留给 maintainer(外发动作)
+- [x] **Step - [x] **Step 11.1** 全量单元:`npx tsx --test --test-force-exit test/*.unit.test.ts src/daemon/*.test.ts web/src/views/*.test.ts` → 全绿
+- [x] **Step - [x] **Step 11.2** 集成顺序跑(I97:DB-backed 不并行):knowledge + channelArtifacts + agentMigrate + taskAssignAgent → 全绿
+- [x] **Step - [x] **Step 11.3** `npm run dev:e2e:up`(worktree 内;需 claude CLI 已登录)→ 记下打印的 dev-login URL
+- [x] **Step - [x] **Step 11.4** 浏览器(Playwright/chrome-devtools MCP)实跑:dev-login → @dev-bot DM 或 #all 发:"用 open-tag knowledge:create 一条私有(title '团队约定',content '周三发布窗口,禁直推 main');再 create 一条 --shared(title '工作区词汇',content '数据库设计稿放 artifacts');然后 search '发布' 和 search '数据库' 各一次;update 团队约定那条的 content 追加 '变更需两人评审';最后 list 给我看全表" → agent 真跑 CLI → 回复含两次命中+列表;截图存 `.shots/`(create 私有/共享 + search CJK + update + list 全覆盖)
+- [x] **Step - [x] **Step 11.5** 浏览器:agent Profile → Knowledge tab 显示该条(截图 `.shots/`)
+- [x] **Step - [x] **Step 11.6** `npm run dev:e2e:down`
+- [x] **Step - [x] **Step 11.7** 更新 `.agents/notes/2026-09-21-agent-knowledge.md` 开发日志(证据链接);Commit:`test: knowledge e2e evidence + dev log`
+- [x] **Step - [x] **Step 11.8** push 分支 + 开 PR(标题 `feat: agent knowledge base (P7)`;正文含 spec/计划链接 + 证据清单 + "daemon publish pending maintainer release")。**不建 GitHub Release、不发 npm** — 发版留给 maintainer(外发动作)
 
 ---
 
