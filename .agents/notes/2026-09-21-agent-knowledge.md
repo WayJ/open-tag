@@ -90,3 +90,18 @@
   6+ hex 前缀,agent 侧自己复制短 id 也能用
 - 验证:`knowledge --help` 六子命令齐、六个子命令 `--help` 均渲染;cliMime 单测 5/5 过;
   root+web typecheck 绿;live CLI 实跑按计划留给 Task 11 e2e
+
+## Task 7 · 常驻提示 Knowledge base 段 + CLI 显示小修(2026-09-22)
+
+- 先行修复 Task 6 评审三处小项(commit A):list/search 行 title/snippet 加
+  `.replace(/\s+/g, " ")` 单行折叠(同 `server info` desc1 惯用法,防多行 title/snippet
+  打破表格行);update/delete 的 `.description()` 补 "(full id or short id)" 措辞(镜像 show)
+- TDD:prompt.test.ts 新增 "knowledge base section teaches create/search and the
+  notes/ split" 断言(## Knowledge base / knowledge create / knowledge search /
+  --shared),先跑 FAIL(ERR_ASSERTION: /## Knowledge base/i),再插段转 PASS 3/3
+- `src/daemon/prompt.ts` 在 notes/ 段后、`## Compaction safety (CRITICAL)` 前插入
+  `## Knowledge base` 段(runtime 无关文案,零 provider 工具名;`${c.stateDir}/notes/`
+  与 knowledge base 互补:notes=工作上下文,knowledge=耐久可检索事实);startup
+  nudge builder 未动
+- 红线 grep:新增行命中 `\b(read|cat|grep|ls|glob|bash)\b` 为零;root+web typecheck 绿;
+  cliMime 单测 5/5、`knowledge search --help` 渲染正常

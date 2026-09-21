@@ -37,3 +37,21 @@ test("conversation turns preserve ambient ownership without permitting duplicate
   assert.match(prompt, /publish at most once for it/i);
   assert.match(prompt, /Another explicit mention owns `grant=directed`/i);
 });
+
+test("knowledge base section teaches create/search and the notes/ split", () => {
+  const prompt = buildSystemPrompt({
+    name: "codex",
+    displayName: "Codex",
+    agentId: "agent-1",
+    serverId: "server-1",
+    hostname: "host",
+    os: "test",
+    stateDir: "/state",
+    projectDir: "/project",
+  });
+
+  assert.match(prompt, /## Knowledge base/i);
+  assert.match(prompt, /knowledge create/i);
+  assert.match(prompt, /knowledge search/i);
+  assert.match(prompt, /--shared/i);
+});

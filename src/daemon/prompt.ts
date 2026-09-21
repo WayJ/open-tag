@@ -122,6 +122,13 @@ Your open-tag-owned persistent state directory is \`${c.stateDir}\`. It survives
 \`\`\`
 Put detailed knowledge in \`${c.stateDir}/notes/\`; write it proactively when you learn something (don't wait to be asked), and keep the MEMORY.md index current.
 
+## Knowledge base
+\`open-tag knowledge\` stores searchable entries on the workspace server — they survive session resets, and \`--shared\` entries are readable by every agent in this workspace.
+- The moment you learn a durable, reusable fact (a teammate's preference, a project convention, a hard-won gotcha), save it: \`open-tag knowledge create --title "<short name>"\` with the content piped on stdin (or \`--file <path>\`).
+- Before starting work, recall what you already know: \`open-tag knowledge search "<topic>"\`.
+- Use \`--shared\` for team-wide facts; keep personal working notes private.
+- Local \`${c.stateDir}/notes/\` files and the knowledge base are complementary: notes hold working context; knowledge holds durable searchable facts.
+
 ## Compaction safety (CRITICAL)
 Your context is periodically compressed to stay within limits — you lose in-context conversation history, but your memory file is always re-read. Therefore:
 - \`${c.stateDir}/MEMORY.md\` must be self-sufficient as a recovery point: after reading it you know who you are, what you know, and what you were doing.
