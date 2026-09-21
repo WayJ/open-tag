@@ -183,25 +183,25 @@ knowledge.command("list").description("list knowledge entries").option("--mine",
   if (opts.limit) q.set("limit", String(opts.limit));
   const d = await api("GET", `/agent-api/knowledge/list?${q}`);
   if (!d.entries?.length) return console.log("No knowledge entries.");
-  for (const e of d.entries) console.log(`  ${e.id}  ${e.shared ? "S" : "P"}  ${e.title}  (${String(e.updatedAt).slice(0, 16).replace("T", " ")})`);
+  for (const e of d.entries) console.log(`  ${e.id}  ${e.shared ? "S" : "P"}  ${String(e.title).replace(/\s+/g, " ")}  (${String(e.updatedAt).slice(0, 16).replace("T", " ")})`);
 });
 knowledge.command("search").description("search knowledge (substring, CJK-safe)").requiredOption("--query <q>", "search term").action(async (opts) => {
   const d = await api("GET", `/agent-api/knowledge/search?q=${encodeURIComponent(opts.query)}`);
   if (!d.results?.length) return console.log("No matches.");
-  for (const r of d.results) console.log(`  ${r.id}  ${r.shared ? "S" : "P"}  ${r.title} — ${r.snippet}`);
+  for (const r of d.results) console.log(`  ${r.id}  ${r.shared ? "S" : "P"}  ${r.title} — ${String(r.snippet).replace(/\s+/g, " ")}`);
 });
 knowledge.command("show").description("show one entry (full id or short id)").requiredOption("--id <id>").action(async (opts) => {
   const d = await api("GET", `/agent-api/knowledge/detail?id=${encodeURIComponent(opts.id)}`);
   console.log(`[${d.shared ? "S" : "P"}] ${d.title}  (${String(d.updatedAt).slice(0, 16).replace("T", " ")})`);
   console.log(d.content);
 });
-knowledge.command("update").description("update title/content of an entry you created (provide at least one of --title/--content/--file)").requiredOption("--id <id>").option("--title <t>").option("--content <t>").option("--file <path>").action(async (opts) => {
+knowledge.command("update").description("update title/content of an entry you created (full id or short id; provide at least one of --title/--content/--file)").requiredOption("--id <id>").option("--title <t>").option("--content <t>").option("--file <path>").action(async (opts) => {
   const content = opts.content == null && opts.file ? await readFile(opts.file, "utf8") : opts.content; // --content > --file
   if (opts.title == null && content == null) { console.error("Error: nothing to update"); console.error("Next action: provide at least one of --title, --content, --file"); process.exit(1); }
   const d = await api("PATCH", "/agent-api/knowledge/update", { id: opts.id, title: opts.title, content });
   console.log(`Updated ${d.id} (${String(d.updatedAt).slice(0, 16).replace("T", " ")})`);
 });
-knowledge.command("delete").description("delete an entry you created").requiredOption("--id <id>").action(async (opts) => {
+knowledge.command("delete").description("delete an entry you created (full id or short id)").requiredOption("--id <id>").action(async (opts) => {
   const d = await api("DELETE", `/agent-api/knowledge/delete?id=${encodeURIComponent(opts.id)}`);
   console.log(`Deleted ${d.id}`);
 });
