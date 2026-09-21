@@ -163,6 +163,49 @@ artifact.command("versions").description("show the version history of one artifa
   for (const v of d.versions) console.log(`  v${v.version}  ${v.filename}${v.note ? "  " + v.note : ""}  (${String(v.createdAt).slice(0, 16).replace("T", " ")})${v.attachmentId ? " att:" + v.attachmentId : ""}`);
 });
 
+// knowledge: searchable facts persisted outside the conversation. Private by default (agentId =
+// creator); --shared makes a workspace-shared entry (agentId = null). Writes are creator-only.
+const knowledge = program.command("knowledge").description("knowledge base (searchable facts; private by default, --shared for all agents)");
+const knowledgeContent = async (opts: { content?: string; file?: string }) => {
+  let content = opts.content; // precedence: --content > --file > stdin
+  if (content == null && opts.file) content = await readFile(opts.file, "utf8");
+  if (content == null) content = await readStdin();
+  if (!content.trim()) { console.error("Error: content required"); console.error("Next action: pass --content, --file <path>, or pipe the body via heredoc on stdin"); process.exit(1); }
+  return content;
+};
+knowledge.command("create").description("save a knowledge entry (content from --content, --file, or stdin)").requiredOption("--title <t>").option("--content <t>").option("--file <path>").option("--shared", "visible to all agents (default: private to you)").action(async (opts) => {
+  const content = await knowledgeContent(opts);
+  const d = await api("POST", "/agent-api/knowledge/create", { title: opts.title, content, shared: !!opts.shared });
+  console.log(`Saved ${d.id} (${d.shared ? "shared" : "private"}): ${opts.title}`);
+});
+knowledge.command("list").description("list knowledge entries").option("--mine", "only entries you created").option("--shared", "only workspace-shared entries").option("--limit <n>").action(async (opts) => {
+  const q = new URLSearchParams({ scope: opts.mine ? "mine" : opts.shared ? "shared" : "all" });
+  if (opts.limit) q.set("limit", String(opts.limit));
+  const d = await api("GET", `/agent-api/knowledge/list?${q}`);
+  if (!d.entries?.length) return console.log("No knowledge entries.");
+  for (const e of d.entries) console.log(`  ${e.id}  ${e.shared ? "S" : "P"}  ${e.title}  (${String(e.updatedAt).slice(0, 16).replace("T", " ")})`);
+});
+knowledge.command("search").description("search knowledge (substring, CJK-safe)").requiredOption("--query <q>", "search term").action(async (opts) => {
+  const d = await api("GET", `/agent-api/knowledge/search?q=${encodeURIComponent(opts.query)}`);
+  if (!d.results?.length) return console.log("No matches.");
+  for (const r of d.results) console.log(`  ${r.id}  ${r.shared ? "S" : "P"}  ${r.title} — ${r.snippet}`);
+});
+knowledge.command("show").description("show one entry (full id or short id)").requiredOption("--id <id>").action(async (opts) => {
+  const d = await api("GET", `/agent-api/knowledge/detail?id=${encodeURIComponent(opts.id)}`);
+  console.log(`[${d.shared ? "S" : "P"}] ${d.title}  (${String(d.updatedAt).slice(0, 16).replace("T", " ")})`);
+  console.log(d.content);
+});
+knowledge.command("update").description("update title/content of an entry you created (provide at least one of --title/--content/--file)").requiredOption("--id <id>").option("--title <t>").option("--content <t>").option("--file <path>").action(async (opts) => {
+  const content = opts.content == null && opts.file ? await readFile(opts.file, "utf8") : opts.content; // --content > --file
+  if (opts.title == null && content == null) { console.error("Error: nothing to update"); console.error("Next action: provide at least one of --title, --content, --file"); process.exit(1); }
+  const d = await api("PATCH", "/agent-api/knowledge/update", { id: opts.id, title: opts.title, content });
+  console.log(`Updated ${d.id} (${String(d.updatedAt).slice(0, 16).replace("T", " ")})`);
+});
+knowledge.command("delete").description("delete an entry you created").requiredOption("--id <id>").action(async (opts) => {
+  const d = await api("DELETE", `/agent-api/knowledge/delete?id=${encodeURIComponent(opts.id)}`);
+  console.log(`Deleted ${d.id}`);
+});
+
 const server = program.command("server").description("workspace information");
 server.command("info").description("list channels, agents, and humans").action(async () => {
   const d = await api("GET", "/agent-api/server/info");

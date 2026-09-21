@@ -73,3 +73,20 @@
 - 集成实跑 66/66 ALL PASS(用例 12 由 RED 转绿:owner 浏览含私有+共享、content 与
   createdBy 映射到 @handle、scope=private/shared 过滤、plain member 403);
   knowledge.unit 7/7、channelArtifacts.integration 复跑 ALL PASS、root+web typecheck 绿
+
+## Task 6 · CLI 六子命令(2026-09-22)
+
+- `src/cli/index.ts` artifact 组后新增 `knowledge` 组 + 共享 `knowledgeContent()` 读法助手:
+  create/update 的 content 取值统一 `--content > --file > stdin`(stdin 复用 message send 的
+  `readStdin()`,TTY 返回空即报 "content required" + Next action 提示后 exit 1;--file 复用
+  attachment/artifact 的 `readFile`),update 另守 "至少一项" 空 update(镜像 profile update)
+- 六子命令全部打印服务端真实返回字段(create 用响应里的 `d.shared`/`d.id`,update 用
+  `d.updatedAt`),不猜契约;list 行 `id  S|P  title  (updatedAt T→空格)`、search 行
+  `id  S|P  title — snippet`、show 打 `[S|P] title` + content 全文、delete 打 `Deleted <id>`
+- list `--mine/--shared → scope=mine|shared`,二者缺省 `all`;`--limit` 仅显式传入才带
+  (服务端 clampLimit 1..50 兜底);search/show/delete 的 id/query 走 `encodeURIComponent`,
+  delete 用 DELETE + query string(与路由取参一致),update 用 PATCH(与路由一致)
+- id 显示用完整 uuid(与 reminder list 同款),不截短——服务端 `resolveIdOrPrefix` 接受
+  6+ hex 前缀,agent 侧自己复制短 id 也能用
+- 验证:`knowledge --help` 六子命令齐、六个子命令 `--help` 均渲染;cliMime 单测 5/5 过;
+  root+web typecheck 绿;live CLI 实跑按计划留给 Task 11 e2e
