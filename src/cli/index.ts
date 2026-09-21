@@ -178,7 +178,7 @@ knowledge.command("create").description("save a knowledge entry (content from --
   const d = await api("POST", "/agent-api/knowledge/create", { title: opts.title, content, shared: !!opts.shared });
   console.log(`Saved ${d.id} (${d.shared ? "shared" : "private"}): ${opts.title}`);
 });
-knowledge.command("list").description("list knowledge entries").option("--mine", "only entries you created").option("--shared", "only workspace-shared entries").option("--limit <n>").action(async (opts) => {
+knowledge.command("list").description("list knowledge entries").option("--mine", "only your private entries").option("--shared", "only workspace-shared entries").option("--limit <n>").action(async (opts) => {
   const q = new URLSearchParams({ scope: opts.mine ? "mine" : opts.shared ? "shared" : "all" });
   if (opts.limit) q.set("limit", String(opts.limit));
   const d = await api("GET", `/agent-api/knowledge/list?${q}`);

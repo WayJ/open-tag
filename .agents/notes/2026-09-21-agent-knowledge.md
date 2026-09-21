@@ -16,8 +16,8 @@
   knowledge:write scope、prompt 一段、Profile tab、TDD 三层验证)
 - [x] spec 评审循环:首轮 1 阻塞项(CLI/prompt 均随 daemon 包发布,
   "无发版项"声明错误——#44 失败模式)+ 4 advisory;全部修正后复审 **Approved**
-- [ ] 用户过目 spec → 实施计划(writing-plans)
-- [ ] 实现 + 测试 + dev:e2e 实跑
+- [x] 用户过目 spec(预授权自动推进)→ 实施计划(writing-plans,评审修正后过审)
+- [x] 实现 + 测试 + dev:e2e 实跑(Task 1-11 全勾,终审 fix-first 项已修)
 
 ## Task 2 · 纯 helper 单元测试先行(2026-09-22)
 

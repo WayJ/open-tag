@@ -297,6 +297,7 @@ async function main() {
   console.log("\n[7] detail: full id + 8-char short id; forged/junk ids → 404 (never 500)");
   const dFull = await kDetail(agentAToken, agentAId, id1);
   check("detail by full id → 200 with content", dFull.status === 200 && (dFull.body as any).content === content1 && (dFull.body as any).title === "部署约定");
+  check("detail response never exposes searchText/serverId", !("searchText" in (dFull.body as any)) && !("serverId" in (dFull.body as any)));
   const short1 = id1.slice(0, 8);
   const dShort = await kDetail(agentAToken, agentAId, short1);
   check("detail by 8-char short id → 200 same entry", dShort.status === 200 && (dShort.body as any).id === id1);
