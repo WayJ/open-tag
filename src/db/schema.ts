@@ -391,12 +391,17 @@ export const reminders = pgTable("reminders", {
 export const knowledge = pgTable("knowledge", {
   id: uuid("id").defaultRandom().primaryKey(),
   serverId: uuid("server_id").notNull().references(() => servers.id),
-  agentId: uuid("agent_id").references(() => agents.id),
+  agentId: uuid("agent_id").references(() => agents.id),                       // null = workspace-shared tier
+  createdByAgentId: uuid("created_by_agent_id").references(() => agents.id).notNull(), // audit/provenance (shared tier)
   title: text("title").notNull(),
   content: text("content").notNull(),
-  searchText: text("search_text"),
+  searchText: text("search_text").notNull(),   // title + "\n\n" + content, fixed at write time — the only column ILIKE scans
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  byAgent: index("knowledge_agent_idx").on(t.serverId, t.agentId),                    // private-tier list
+  byServerCreated: index("knowledge_server_created_idx").on(t.serverId, t.createdAt), // shared-tier scan + keyset page
+}));
 
 // ── Agent activity log (activity-log: status|text|tool_start timeline) ──
 export const agentActivityLog = pgTable("agent_activity_log", {
