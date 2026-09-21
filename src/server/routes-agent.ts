@@ -18,6 +18,7 @@ import { CHANNEL_DELETED_NOTICE_KIND, channelDeletedNoticeForAgent, type Channel
 import { inputSenderAllowed } from "./agentInputPolicy.js";
 import { agentInputVisible, filterAgentInputView } from "./agentInputView.js";
 import { handleArtifactRoutes } from "./routes-agent/artifacts.js";
+import { handleKnowledgeRoutes } from "./routes-agent/knowledge.js";
 
 // Freshness-hold draft buffer (prevents agent↔agent duplicate replies): when the agent sends
 // and new messages have arrived since last read → save as draft + surface bounded context, do not post immediately.
@@ -50,6 +51,8 @@ function requiredScope(p: string): string | null {
   if (p === "/agent-api/attachment/view") return "attachment:view";
   if (p === "/agent-api/profile/show") return "server:read";
   if (p === "/agent-api/action/prepare") return "action:prepare";
+  if (p === "/agent-api/knowledge/create" || p === "/agent-api/knowledge/update" || p === "/agent-api/knowledge/delete") return "knowledge:write";
+  if (p.startsWith("/agent-api/knowledge/")) return "knowledge:read";
   // profile/update has no scope requirement (own profile)
   return null;
 }
@@ -537,6 +540,9 @@ export async function handleAgentApi(req: IncomingMessage, res: ServerResponse, 
   // Channel artifacts (versioned deliverables): publish/list/versions live in the first split
   // file under routes-agent/ — mounted after resolveAgent + scope check, like every inline route.
   if (await handleArtifactRoutes(req, res, url, method, p, agent, serverId)) return true;
+  // Agent knowledge base (private/shared tiers): create/list/search/detail/update/delete — mounted
+  // after resolveAgent + scope check, like every inline route.
+  if (await handleKnowledgeRoutes(req, res, url, method, p, agent, serverId)) return true;
 
   if (p === "/agent-api/message/react" && method === "POST") {
     const b = await readJson(req);

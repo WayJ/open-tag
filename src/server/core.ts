@@ -849,9 +849,10 @@ export async function convertMessageToTask(serverId: string, messageId: string, 
 /** Single definition of the agent-facing id convention: full uuid → exact match; 6+ hex chars → serverId-scoped
  *  prefix match; anything else (dashes in a partial, LIKE metachars, too short) → null — never a 500 from casting
  *  a non-uuid into the uuid column. Shared by messages (resolveMessageId) and attachments (attachment/view) so
- *  the convention cannot drift per-resource. Returns the resolved full id; the caller applies its own ACL. */
+ *  the convention cannot drift per-resource. Returns the resolved full id; the caller applies its own ACL.
+ *  (Tables: messages, attachments, knowledge — all carry id + serverId.) */
 export async function resolveIdOrPrefix(
-  table: typeof schema.messages | typeof schema.attachments,
+  table: typeof schema.messages | typeof schema.attachments | typeof schema.knowledge,
   serverId: string,
   idOrShort: string | undefined | null,
 ): Promise<string | null> {
