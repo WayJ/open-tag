@@ -105,3 +105,21 @@
   nudge builder 未动
 - 红线 grep:新增行命中 `\b(read|cat|grep|ls|glob|bash)\b` 为零;root+web typecheck 绿;
   cliMime 单测 5/5、`knowledge search --help` 渲染正常
+
+## Task 8 · web Knowledge tab(admin 只读浏览)(2026-09-22)
+
+- 先行小修(commit A):CLI `knowledge search` 行 title 也做 `.replace(/\s+/g, " ")`
+  单行折叠,与 list 行对称(多行 title 会打破单行输出)
+- `Members.tsx` 新增 `KnowledgeTab`(仿 RemindersTab 取数+列表形态):一次
+  `GET /api/agents/:id/knowledge?scope=all&limit=50`,客户端按 `agentId===id` /
+  `agentId===null` 分成 私有/共享 两组,少一次请求;行 = title + `knowledgeCreatedBy`
+  + fmtDateTime,点击展开折叠 `<pre class="ws-content">`(复用 WorkspaceTab 的
+  monospace 样式,零新 CSS);空态 knowledgeEmpty;`hasMore` → 尾部一行提示
+  knowledgeMoreHint(兄弟 tab 无 load-more 先例,不做按钮,不过度设计)
+- tab 数组在 reminders 后插 `["knowledge", ...]`,filter 与 dms 同款
+  `capabilities.manageAgents` 门控;`requestedTab` 无 capability 时回落 profile
+  (与 dms 同一行);键位 en/zh 各 7 个(tabKnowledge + 组标签×2 + 空态 + 创建者
+  + (未知) 兜底 + more 提示;略超 prompt 的 ≤6,unknown 兜底和 hasMore 提示都
+  需要本地化文案,硬编码不划算)
+- 验证:root+web typecheck 绿;tasksBoardLayout 单测 2/2 过;Members.tsx 无测试
+  直接 import(全仓 grep 确认);浏览器实跑留给 e2e

@@ -164,7 +164,7 @@ export function AgentProfile({ id, onDeleted, onClose, onMessage }: { id: string
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
   const requestedTab = sp.get("agentTab") || "profile";
-  const tab = requestedTab === "dms" && !capabilities.manageAgents ? "profile" : requestedTab;
+  const tab = (requestedTab === "dms" || requestedTab === "knowledge") && !capabilities.manageAgents ? "profile" : requestedTab;
   const [a, setA] = useState<any>(null);
   const [edit, setEdit] = useState(false); const [dn, setDn] = useState(""); const [ds, setDs] = useState(""); const [projectPath, setProjectPath] = useState(""); // profile edit state
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
@@ -264,10 +264,11 @@ export function AgentProfile({ id, onDeleted, onClose, onMessage }: { id: string
           ["permissions", t("members.tabPermissions")],
           ["dms", t("members.tabDms")],
           ["reminders", t("members.tabReminders")],
+          ["knowledge", t("members.tabKnowledge")],
           ["workspace", t("members.tabWorkspace")],
           ["integrations", t("members.tabIntegrations")],
           ["activity", t("members.tabActivity")],
-        ] as [string, string][]).filter(([k]) => k !== "dms" || capabilities.manageAgents).map(([k, label]) => (
+        ] as [string, string][]).filter(([k]) => (k !== "dms" && k !== "knowledge") || capabilities.manageAgents).map(([k, label]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setSp((prev) => { const n = new URLSearchParams(prev); n.set("agentTab", k); return n; })}>{label}</button>
         ))}
       </div>
@@ -277,6 +278,7 @@ export function AgentProfile({ id, onDeleted, onClose, onMessage }: { id: string
         : tab === "integrations" ? <AppsTab id={id} />
         : tab === "dms" ? <DmsTab id={id} name={a.name} />
         : tab === "reminders" ? <RemindersTab id={id} name={a.name} />
+        : tab === "knowledge" ? <KnowledgeTab id={id} />
         : (
           <div className="scroll">
             <div className="card">
@@ -628,6 +630,40 @@ function RemindersTab({ id, name }: { id: string; name: string }) {
           <div className="meta"><span className={"rem-badge " + (r.status || "scheduled")}>{REM_STATUS[r.status] ? t(REM_STATUS[r.status]) : r.status}</span> · {fmtDateTime(r.remindAt)}</div>
         </div>
       ))}</div>;
+}
+
+// Knowledge tab (read-only, admin-gated like the GET route; agents write entries via `open-tag knowledge`).
+// One scope=all fetch, grouped client-side: agentId===id → the agent's private entries, agentId===null → workspace-shared.
+function KnowledgeTab({ id }: { id: string }) {
+  const { t } = useTranslation();
+  const { api } = useStore();
+  const [entries, setEntries] = useState<any[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  useEffect(() => { (async () => {
+    try { const d = await api("GET", `/api/agents/${id}/knowledge?scope=all&limit=50`); setEntries(d?.entries || []); setHasMore(!!d?.hasMore); }
+    catch { setEntries([]); }
+  })(); }, [id]);
+  const priv = (entries || []).filter((e) => e.agentId === id);
+  const shared = (entries || []).filter((e) => !e.agentId);
+  const toggle = (eid: string) => setOpenId((o) => (o === eid ? null : eid));
+  const group = (label: string, list: any[]) => list.length === 0 ? null : <>
+    <div className="sec">{label} <span className="cnt">{list.length}</span></div>
+    {list.map((e) => (
+      <div className="card card-link" key={e.id} role="button" tabIndex={0} onClick={() => toggle(e.id)}
+        onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e.id); } }}>
+        <div className="who">{e.title}<span className="meta"> · {t("members.knowledgeCreatedBy", { name: e.createdBy || t("members.knowledgeUnknownCreator") })} · {fmtDateTime(e.createdAt)}</span></div>
+        {openId === e.id && <pre className="ws-content" style={{ marginTop: 6 }}>{e.content}</pre>}
+      </div>
+    ))}
+  </>;
+  return (
+    <div className="scroll">
+      {!entries?.length ? <div className="empty">{t("members.knowledgeEmpty")}</div>
+        : <>{group(t("members.knowledgePrivate"), priv)}{group(t("members.knowledgeShared"), shared)}</>}
+      {hasMore && <div className="meta" style={{ opacity: .6, marginTop: 8 }}>{t("members.knowledgeMoreHint")}</div>}
+    </div>
+  );
 }
 
 // Activity timeline (GET /api/agents/:id/activity-log for history + live-appended via agent:activity/trajectory events)
