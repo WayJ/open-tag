@@ -42,7 +42,7 @@ from `main`; see commit history for fine-grained server/web changes.
 
 > Bullets 1–4 span `src/daemon/**` (shipped in the bundle): they reach `npx
 > @fancyboi999/open-tag-daemon` machines only with the **next daemon package release**
-> (release pending — no version bump in this batch per maintainer policy). Bullet 5 is
+> (they ride the 0.18.0 package below). Bullet 5 is
 > server-side and ships continuously from `main`.
 
 - **Idle-sleep no longer kills a quiet mid-turn scope** — the `IDLE_MS` timer fired
@@ -84,7 +84,7 @@ from `main`; see commit history for fine-grained server/web changes.
 > Version bump staged in `packages/daemon/package.json`; the outward-facing release steps are
 > the maintainer's: cut the GitHub Release `v0.18.0` (fires `publish-daemon.yml` → npm via
 > OIDC Trusted Publishing), then bounce long-lived daemons
-> (`npx @fancyboi999/open-tag-daemon@latest`). The [Unreleased] entries below also ship in
+> (`npx @fancyboi999/open-tag-daemon@latest`). The [Unreleased] entries above also ship in
 > this package when it goes out.
 
 ### Added
