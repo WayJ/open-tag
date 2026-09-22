@@ -77,3 +77,28 @@ test("disabled user: login 403, existing JWT rejected at gate 1, me exposes syst
   assert.equal(loginRes.status, 403);
   assert.equal(((await loginRes.json()) as any).code, "auth_account_disabled");
 });
+
+test("registration gate: obeys openRegistration toggle; admin can flip it; config reflects it", async () => {
+  const admin = await insertUser({ email: `sa2-${suffix}@t.local`, name: `sa2${suffix}`, password: "password-1", systemRole: "system_admin" });
+  const hdr = { authorization: `Bearer ${signUser(admin.id)}`, "content-type": "application/json" };
+
+  assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, true);
+  const reg1 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: `rg1${suffix}`, email: `rg1-${suffix}@t.local`, password: "password-1" }) });
+  assert.equal(reg1.status, 200);
+
+  const patch = await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: false }) });
+  assert.equal(patch.status, 200);
+  assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, false);
+  const reg2 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: `rg2${suffix}`, email: `rg2-${suffix}@t.local`, password: "password-1" }) });
+  assert.equal(reg2.status, 403);
+  assert.equal(((await reg2.json()) as any).code, "auth_registration_closed");
+
+  // non-admin cannot PATCH settings
+  const plebTok = signUser((await insertUser({ email: `pl2-${suffix}@t.local`, name: `pl2${suffix}`, password: "password-1" })).id);
+  assert.equal((await api("/api/admin/settings", { method: "PATCH", headers: { authorization: `Bearer ${plebTok}`, "content-type": "application/json" }, body: JSON.stringify({ openRegistration: true }) })).status, 403);
+
+  // restore for later batches
+  await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: true }) });
+});
