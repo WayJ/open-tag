@@ -16,9 +16,9 @@ import { GITHUB_URL, resolveDocsHref } from "../landing/publicNav.ts";
 import "../landing/landing.css";
 
 function detectLandingLang(): Lang {
-  if (typeof window === "undefined") return "en";
+  if (typeof window === "undefined") return "zh";
   const saved = window.localStorage?.getItem("open-tag.lang");
-  return currentLang(saved || window.navigator?.language || "en");
+  return currentLang(saved || "zh");
 }
 
 // GitHub mark (inline SVG — lucide dropped third-party brand logos; use SVG, not emoji)

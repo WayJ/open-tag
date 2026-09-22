@@ -167,8 +167,8 @@ function currentLang(language?: string): ProductMockLang {
 }
 
 function browserLang(): ProductMockLang {
-  if (typeof window === "undefined" || !window.localStorage) return "en";
-  return currentLang(window.localStorage.getItem("open-tag.lang") || "en");
+  if (typeof window === "undefined" || !window.localStorage) return "zh";
+  return currentLang(window.localStorage.getItem("open-tag.lang") || "zh");
 }
 
 function nameSeed(name: string) {
