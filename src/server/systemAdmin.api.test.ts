@@ -82,23 +82,59 @@ test("registration gate: obeys openRegistration toggle; admin can flip it; confi
   const admin = await insertUser({ email: `sa2-${suffix}@t.local`, name: `sa2${suffix}`, password: "password-1", systemRole: "system_admin" });
   const hdr = { authorization: `Bearer ${signUser(admin.id)}`, "content-type": "application/json" };
 
-  assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, true);
-  const reg1 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: `rg1${suffix}`, email: `rg1-${suffix}@t.local`, password: "password-1" }) });
-  assert.equal(reg1.status, 200);
+  // establish the precondition explicitly (no order dependence on earlier runs/tests)
+  assert.equal((await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: true }) })).status, 200);
+  try {
+    assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, true);
+    const reg1 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: `rg1${suffix}`, email: `rg1-${suffix}@t.local`, password: "password-1" }) });
+    assert.equal(reg1.status, 200);
 
-  const patch = await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: false }) });
-  assert.equal(patch.status, 200);
-  assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, false);
-  const reg2 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: `rg2${suffix}`, email: `rg2-${suffix}@t.local`, password: "password-1" }) });
-  assert.equal(reg2.status, 403);
-  assert.equal(((await reg2.json()) as any).code, "auth_registration_closed");
+    const patch = await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: false }) });
+    assert.equal(patch.status, 200);
+    assert.equal(((await (await api("/api/auth/config")).json()) as any).openRegistration, false);
+    const reg2 = await api("/api/auth/register", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: `rg2${suffix}`, email: `rg2-${suffix}@t.local`, password: "password-1" }) });
+    assert.equal(reg2.status, 403);
+    assert.equal(((await reg2.json()) as any).code, "auth_registration_closed");
 
-  // non-admin cannot PATCH settings
-  const plebTok = signUser((await insertUser({ email: `pl2-${suffix}@t.local`, name: `pl2${suffix}`, password: "password-1" })).id);
-  assert.equal((await api("/api/admin/settings", { method: "PATCH", headers: { authorization: `Bearer ${plebTok}`, "content-type": "application/json" }, body: JSON.stringify({ openRegistration: true }) })).status, 403);
+    // non-admin cannot PATCH settings
+    const plebTok = signUser((await insertUser({ email: `pl2-${suffix}@t.local`, name: `pl2${suffix}`, password: "password-1" })).id);
+    assert.equal((await api("/api/admin/settings", { method: "PATCH", headers: { authorization: `Bearer ${plebTok}`, "content-type": "application/json" }, body: JSON.stringify({ openRegistration: true }) })).status, 403);
+  } finally {
+    // restore for later batches — must run even if an assert above threw
+    await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: true }) });
+  }
+});
 
-  // restore for later batches
-  await api("/api/admin/settings", { method: "PATCH", headers: hdr, body: JSON.stringify({ openRegistration: true }) });
+test("admin users: list, disable/enable, grant/revoke sysadmin, self-guard, reset password", async () => {
+  const admin = await insertUser({ email: `sa3-${suffix}@t.local`, name: `sa3${suffix}`, password: "password-1", systemRole: "system_admin" });
+  const hdr = { authorization: `Bearer ${signUser(admin.id)}`, "content-type": "application/json" };
+  const pleb = await insertUser({ email: `pl3-${suffix}@t.local`, name: `pl3${suffix}`, password: "password-1" });
+
+  const forb = await api("/api/admin/users", { headers: { authorization: `Bearer ${signUser(pleb.id)}` } });
+  assert.equal(forb.status, 403);
+
+  const list: any = await (await api("/api/admin/users", { headers: hdr })).json();
+  const row = list.users.find((x: any) => x.id === pleb.id);
+  assert.ok(row && row.systemRole === null && row.workspaceCount === 0 && row.disabledAt === null);
+
+  await api(`/api/admin/users/${pleb.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ disabled: true }) });
+  assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: "password-1" }) })).status, 403);
+  await api(`/api/admin/users/${pleb.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ disabled: false }) });
+  assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: "password-1" }) })).status, 200);
+
+  assert.equal((await api(`/api/admin/users/${admin.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ disabled: true }) })).status, 400);
+  assert.equal((await api(`/api/admin/users/${admin.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ systemRole: null }) })).status, 400);
+
+  await api(`/api/admin/users/${pleb.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ systemRole: "system_admin" }) });
+  assert.equal(((await (await api("/api/auth/me", { headers: { authorization: `Bearer ${signUser(pleb.id)}` } })).json()) as any).systemRole, "system_admin");
+  await api(`/api/admin/users/${pleb.id}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ systemRole: null }) });
+
+  const rst = await api(`/api/admin/users/${pleb.id}/reset-password`, { method: "POST", headers: hdr });
+  assert.equal(rst.status, 200);
+  const temp = ((await rst.json()) as any).tempPassword as string;
+  assert.ok(typeof temp === "string" && temp.length >= 10);
+  assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: "password-1" }) })).status, 401);
+  assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: temp }) })).status, 200);
 });
