@@ -10,6 +10,35 @@ import { openRegistrationEnabled, setOpenRegistration } from "../systemSettings.
 import { inviteStatus } from "../systemAdminPolicy.js";
 import { logAudit } from "../audit.js";
 
+/** Every schema table that carries a `serverId` column, in children-first FK dependency order —
+ *  this array IS the workspace hard-delete path (the DELETE route loops it), and the reflection
+ *  meta-test in systemAdmin.api.test.ts holds it against src/db/schema.ts so a newly added
+ *  server-scoped table cannot silently miss its delete. Tables with no serverId column
+ *  (message_mentions, reactions, channel_members) are cleared separately via subquery inArray. */
+export const SERVER_DELETE_TABLES = [
+  schema.agentActivityLog,      // serverId is a bare uuid (no FK) — direct column filter still clears it
+  schema.artifactVersions,      // before artifacts + attachments (attachmentId FK, no cascade)
+  schema.agentMessageDecisions, // messageId ×2 / agentId ×2 / channelId FKs
+  schema.agentMessageObservations,
+  schema.savedMessages,
+  schema.attachments,           // before messages (messageId FK, no cascade)
+  schema.messages,
+  schema.causalEdges,           // before conversationTurns + agents
+  schema.conversationTurns,
+  schema.knowledge,             // agentId + createdByAgentId FKs → before agents
+  schema.agentSessions,         // agentId + scopeId(channel) FKs
+  schema.agentMemory,           // agentId FK
+  schema.artifacts,             // channelId + createdByAgentId FKs
+  schema.reminders,             // channelId FK
+  schema.channels,              // channelMembers (no serverId) cleared just before this entry via subquery
+  schema.agents,                // before machines (machineId FK)
+  schema.machines,
+  schema.joinLinks,
+  schema.systemInvites,
+  schema.serverSidebarPrefs,
+  schema.serverMembers,
+] as const;
+
 export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null): Promise<boolean> {
   if (!ctx.p.startsWith("/api/admin/")) return false;
   if (systemRole !== "system_admin") return (sendErr(ctx.res, 403, "system admin required"), true);
@@ -137,46 +166,32 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
       const srv = (await db.select().from(schema.servers).where(eq(schema.servers.id, m[1]!)))[0];
       if (!srv) return (sendErr(ctx.res, 404, "server not found"), true);
       // Hard-delete every row the workspace owns, children before parents. Enumerated from src/db/schema.ts
-      // (FK graph audit 2026-09): most server-scoped tables carry a serverId column (deleted directly);
-      // channel-scoped (channel_members) and message-scoped (message_mentions, reactions) tables have no
-      // serverId and are cleared via inArray on this server's channel/message ids. Schema-level cascades
-      // exist on some FKs (conversation_turns/causal_edges/agent_message_observations) but only on those
-      // specific edges — nothing cascades off the servers row itself, so every table is cleared explicitly.
-      // agentActivityLog.serverId is a bare uuid (no FK) — still cleared by direct filter.
+      // (FK graph audit 2026-09). Some serverId FKs carry onDelete: "cascade" (conversation_turns,
+      // causal_edges, agent_message_observations) — those cascades would fire only when the servers row
+      // itself is deleted, and every explicit delete below runs BEFORE that row goes, so they are a
+      // backstop we never rely on: all other child tables (no cascade on their FKs) must be cleared
+      // explicitly, hence the exhaustive set.
+      // message/channel-scoped tables without a serverId column (message_mentions, reactions,
+      // channel_members) are cleared via inArray SUBQUERIES — never a pre-collected id array: the array
+      // form binds one parameter per element and Postgres caps a statement at 65,535 binds, so a large
+      // workspace delete would 500; `in (select …)` is one statement, no bind explosion.
       // audit_logs.targetServerId references servers (NO ACTION): older rows referencing this server are
       // set to NULL (append-only history is kept; the row survives with its metadata).
       // NOTE: no daemon/agent processes are killed here — their server row is gone, so agent auth and
       // daemon reconnects against this server fail naturally on next use.
       await db.transaction(async (tx) => {
-        const chanIds = (await tx.select({ id: schema.channels.id }).from(schema.channels).where(eq(schema.channels.serverId, srv.id))).map((r) => r.id);
-        const msgIds = (await tx.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.serverId, srv.id))).map((r) => r.id);
-        // message-scoped children (before messages)
-        if (msgIds.length) await tx.delete(schema.messageMentions).where(inArray(schema.messageMentions.messageId, msgIds));
-        if (msgIds.length) await tx.delete(schema.reactions).where(inArray(schema.reactions.messageId, msgIds));
-        // serverId-carrying children, dependents first
-        await tx.delete(schema.agentActivityLog).where(eq(schema.agentActivityLog.serverId, srv.id));
-        await tx.delete(schema.artifactVersions).where(eq(schema.artifactVersions.serverId, srv.id)); // before artifacts + attachments (attachmentId FK, no cascade)
-        await tx.delete(schema.agentMessageDecisions).where(eq(schema.agentMessageDecisions.serverId, srv.id));
-        await tx.delete(schema.agentMessageObservations).where(eq(schema.agentMessageObservations.serverId, srv.id));
-        await tx.delete(schema.savedMessages).where(eq(schema.savedMessages.serverId, srv.id));
-        await tx.delete(schema.attachments).where(eq(schema.attachments.serverId, srv.id)); // before messages (messageId FK)
-        await tx.delete(schema.messages).where(eq(schema.messages.serverId, srv.id));
-        await tx.delete(schema.causalEdges).where(eq(schema.causalEdges.serverId, srv.id)); // before turns + agents
-        await tx.delete(schema.conversationTurns).where(eq(schema.conversationTurns.serverId, srv.id));
-        await tx.delete(schema.knowledge).where(eq(schema.knowledge.serverId, srv.id)); // agentId FKs
-        await tx.delete(schema.agentSessions).where(eq(schema.agentSessions.serverId, srv.id)); // agentId + scopeId(channel) FKs
-        await tx.delete(schema.agentMemory).where(eq(schema.agentMemory.serverId, srv.id)); // agentId FK
-        await tx.delete(schema.artifacts).where(eq(schema.artifacts.serverId, srv.id)); // channelId + createdByAgentId FKs
-        await tx.delete(schema.reminders).where(eq(schema.reminders.serverId, srv.id)); // channelId FK
-        // channel-scoped children (before channels)
-        if (chanIds.length) await tx.delete(schema.channelMembers).where(inArray(schema.channelMembers.channelId, chanIds));
-        await tx.delete(schema.channels).where(eq(schema.channels.serverId, srv.id));
-        await tx.delete(schema.agents).where(eq(schema.agents.serverId, srv.id)); // before machines (machineId FK)
-        await tx.delete(schema.machines).where(eq(schema.machines.serverId, srv.id));
-        await tx.delete(schema.joinLinks).where(eq(schema.joinLinks.serverId, srv.id));
-        await tx.delete(schema.systemInvites).where(eq(schema.systemInvites.serverId, srv.id));
-        await tx.delete(schema.serverSidebarPrefs).where(eq(schema.serverSidebarPrefs.serverId, srv.id));
-        await tx.delete(schema.serverMembers).where(eq(schema.serverMembers.serverId, srv.id));
+        await tx.delete(schema.messageMentions).where(inArray(schema.messageMentions.messageId,
+          tx.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.serverId, srv.id))));
+        await tx.delete(schema.reactions).where(inArray(schema.reactions.messageId,
+          tx.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.serverId, srv.id))));
+        for (const t of SERVER_DELETE_TABLES) {
+          // channel_members has no serverId column — clear it via subquery right before its parent channels row
+          if (t === schema.channels) {
+            await tx.delete(schema.channelMembers).where(inArray(schema.channelMembers.channelId,
+              tx.select({ id: schema.channels.id }).from(schema.channels).where(eq(schema.channels.serverId, srv.id))));
+          }
+          await tx.delete(t).where(eq(t.serverId, srv.id));
+        }
         // keep audit history: detach this server from old audit rows instead of deleting them
         await tx.update(schema.auditLogs).set({ targetServerId: null }).where(eq(schema.auditLogs.targetServerId, srv.id));
         await tx.delete(schema.servers).where(eq(schema.servers.id, srv.id));

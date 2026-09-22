@@ -7,10 +7,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
-import { and, eq } from "drizzle-orm";
+import { and, eq, getTableColumns, getTableName } from "drizzle-orm";
 import { db, schema, sql } from "../db/index.js";
 import { hashPassword, signUser } from "./auth.js";
 import { promoteSystemAdminsFromEnv } from "./systemSettings.js";
+import { SERVER_DELETE_TABLES } from "./routes-api/admin.js";
+import { logAudit } from "./audit.js";
 
 let serverProcess: ChildProcess | null = null;
 let base = "";
@@ -252,6 +254,9 @@ test("admin servers/stats/audit: list counts, delete cascades, gate-2 rejection,
   const tmpRow = list.servers.find((s: any) => s.id === tmp!.id);
   assert.ok(tmpRow && tmpRow.memberCount === 1 && tmpRow.agentCount === 1);
 
+  // pre-existing audit row referencing this server: must SURVIVE the delete with targetServerId nulled
+  await logAudit("invite.created", { actorUserId: admin.id, targetServerId: tmp!.id, metadata: { tag: `batchd-audit-${suffix}` } });
+
   assert.equal((await api(`/api/admin/servers/${tmp!.id}`, { method: "DELETE", headers: hdr })).status, 200);
   assert.equal((await db.select().from(schema.servers).where(eq(schema.servers.id, tmp!.id))).length, 0);
   assert.equal((await db.select().from(schema.channels).where(eq(schema.channels.serverId, tmp!.id))).length, 0);
@@ -273,6 +278,11 @@ test("admin servers/stats/audit: list counts, delete cascades, gate-2 rejection,
     assert.equal((await db.select().from(t as any).where(eq(t.serverId, tmp!.id))).length, 0, `rows left in ${name}`);
   }
   assert.equal((await db.select().from(schema.messageMentions).where(eq(schema.messageMentions.messageId, msg!.id))).length, 0);
+  // the audit row we planted before the delete survives, detached (targetServerId nulled, not deleted)
+  const planted = (await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.event, "invite.created")))
+    .filter((r) => (r.metadata as any)?.tag === `batchd-audit-${suffix}`);
+  assert.equal(planted.length, 1);
+  assert.equal(planted[0]!.targetServerId, null);
   // member JWT still valid globally, but server-scoped API now 403 (gate 2 membership gone)
   const scoped = await api("/api/channels", { headers: { authorization: `Bearer ${signUser(admin.id)}`, "x-server-id": tmp!.id } });
   assert.equal(scoped.status, 403); // "not a member of this server"
@@ -306,4 +316,18 @@ test("SYSTEM_ADMIN_EMAILS promotion: idempotent, promote-only", async () => {
     const row2 = (await db.select().from(schema.users).where(eq(schema.users.id, u.id)))[0]!;
     assert.equal(row2.systemRole, "system_admin"); // promote-only: clearing env must not demote
   } finally { delete process.env.SYSTEM_ADMIN_EMAILS; }
+});
+
+// Reflection meta-test: hold the admin workspace-delete table set against the live schema, so a
+// newly added table with a serverId column cannot silently miss its delete (rows left behind, or a
+// FK violation 500ing the whole DELETE). SERVER_DELETE_TABLES drives the actual delete loop in
+// routes-api/admin.ts — this checks that loop's input, not a hand-copied list.
+test("meta: every schema table with a serverId column is covered by the admin server-delete set", () => {
+  const covered = new Set(SERVER_DELETE_TABLES.map((t) => getTableName(t)));
+  const missing = Object.values(schema)
+    .filter((t) => { try { return "serverId" in getTableColumns(t as never); } catch { return false; } })
+    .map((t) => getTableName(t as never))
+    .filter((name) => !covered.has(name));
+  assert.deepEqual(missing, [],
+    "schema tables with a serverId column missing from SERVER_DELETE_TABLES (src/server/routes-api/admin.ts) — add the table children-first or the workspace DELETE leaks rows / FK-fails");
 });

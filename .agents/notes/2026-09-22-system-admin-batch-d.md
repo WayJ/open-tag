@@ -14,12 +14,12 @@ Batch D = Task 8（`GET /api/admin/servers`、`DELETE /api/admin/servers/:id` �
 ### FK 枚举（删除事务的核心，schema 全表审计结果）
 
 删除顺序 = 子表先于父表；直接 `serverId` 列的表按列删，无 serverId 的表
-（channel/message-scoped）先收集本 server 的 channel/message id 再 `inArray` 删：
+（channel/message-scoped）用 `in (select …)` 子查询按本 server 的 channel/message id 删：
 
 | # | 表 | 删除路径 |
 |---|---|---|
-| 1 | message_mentions | messageId inArray(本 server 消息 id) — 无 serverId 列 |
-| 2 | reactions | messageId inArray(同上) — 无 serverId 列 |
+| 1 | message_mentions | messageId in (select 本 server 消息 id) — 无 serverId 列 |
+| 2 | reactions | messageId in (select 同上) — 无 serverId 列 |
 | 3 | agent_activity_log | 直接 serverId（bare uuid 列，非 FK，仍可按列过滤） |
 | 4 | artifact_versions | 直接 serverId（须先于 artifacts + attachments：attachmentId FK 无级联） |
 | 5 | agent_message_decisions | 直接 serverId（messageId×2 / agentId×2 / channelId FKs） |
@@ -34,7 +34,7 @@ Batch D = Task 8（`GET /api/admin/servers`、`DELETE /api/admin/servers/:id` �
 | 14 | agent_memory | 直接 serverId（agentId） |
 | 15 | artifacts | 直接 serverId（channelId + createdByAgentId） |
 | 16 | reminders | 直接 serverId（channelId） |
-| 17 | channel_members | channelId inArray(本 server 频道 id) — **无 serverId 列，任务已知表清单遗漏** |
+| 17 | channel_members | channelId in (select 本 server 频道 id) — **无 serverId 列，任务已知表清单遗漏** |
 | 18 | channels | 直接 serverId |
 | 19 | agents | 直接 serverId（machineId → 先于 machines） |
 | 20 | machines | 直接 serverId |
@@ -45,9 +45,11 @@ Batch D = Task 8（`GET /api/admin/servers`、`DELETE /api/admin/servers/:id` �
 | 25 | audit_logs | **UPDATE set targetServerId=null**（FK 指向 servers，NO ACTION；置空保历史而非删行） |
 | 26 | servers | 删行本身 |
 
-Schema 级级联只存在于 conversationTurns/causalEdges/agentMessageObservations 的个别
-FK 上，**servers 行本身没有任何级联**，所以全部显式删。bare uuid 列（无 FK）
-不影响删除，但 agentActivityLog.serverId 按列过滤一并清理。
+conversationTurns/causalEdges/agentMessageObservations 三张表的 serverId FK 带
+`onDelete: "cascade"`（schema.ts:161/237/305）——级联存在，但只在 servers 行被删除时
+触发，而全部显式删除**先于** servers 删行执行，级联只是永不依赖的兜底；其余 20+ 张
+子表的 FK 无级联，仍需全枚举。bare uuid 列（无 FK）不影响删除，但
+agentActivityLog.serverId 按列过滤一并清理。
 
 ### 对任务给定片段的偏离（评审时注意）
 
@@ -116,3 +118,29 @@ FK 上，**servers 行本身没有任何级联**，所以全部显式删。bare 
   下一次请求才 403。UI 侧后续处理。
 - `GET /api/admin/servers` 无分页（当前规模全量返回，与 users 列表同口径）。
 - 未跑浏览器 E2E（本批纯 REST，无 UI）。
+
+## 评审修复（同日：`fix(admin): batch-D review follow-ups`）
+
+质量评审通过后的 follow-up（一个 commit）：
+
+- [Important] **inArray 数组形态的 65,535 绑定上限**：预收集 msgIds/chanIds 再
+  `inArray(col, array)` 每元素一个绑定参数，大 workspace 删除必 500（Postgres 单语句
+  绑定上限）。改为 drizzle 子查询形态 `inArray(col, tx.select({id}).from(...).where(...))`
+  （生成 `in (select …)` 单语句）；messageMentions / reactions / channelMembers 三处
+  同改，预收集数组删除。
+- [Minor] **注释/dev log 事实修正**：三条 serverId FK 带 `onDelete: "cascade"`
+  （schema.ts:161/237/305），非"servers 行零级联"。准确措辞：级联存在但显式删除
+  先于 servers 删行执行，是永不依赖的兜底；全枚举的理由不变（其余 FK 无级联）。
+- [Minor] **反射 meta-test**：`SERVER_DELETE_TABLES` 提为 admin.ts 导出的有序数组并
+  **驱动实际删除循环**（清单=行为，不会脱节）；meta-test 用 `getTableColumns` 反射
+  schema 中所有含 serverId 列的表，断言全被数组覆盖——schema 新增含 serverId 表而
+  忘加删除时变红。变异验证：临时移除 joinLinks → meta-test 红（列出 join_links），
+  同时级联行为测试也红（FK 500），双保险；还原后全绿。
+- [Minor] **audit 置空路径测试**：删除前直插 `invite.created`（targetServerId=tmp）
+  审计行，删后断言行存活且 targetServerId 为 null（append-only 历史保留）。
+- [Minor] tech-debt 新增：I119（audit-logs `before` 游标同刻跳行）、I120（servers
+  DELETE 并发窗口——两请求可同时过存在检查，一个 200 一个 FK 500 而非 404）、
+  I121（`?limit=` 空串被夹到 1 而非回退 50）。
+- 证据：`npx tsx --test --test-force-exit src/server/systemAdmin.api.test.ts` →
+  7 tests / 7 pass / 0 fail（含 meta-test 与 audit 置空断言）；
+  `npm run typecheck` → exit 0。
