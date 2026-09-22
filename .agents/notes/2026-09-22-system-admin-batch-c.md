@@ -73,6 +73,24 @@ Batch C = Task 6（用户管理端点）与 Task 7（系统邀请端点），外
 masked email、404 fallback）。FEATURES.md / README 留给整平面收尾 doc 任务
 （spec §9），与 batch B 口径一致。
 
+## 评审修复（同日：`fix(admin): invite dup check must consider pending rows only`）
+
+Spec 评审发现并复现的缺陷 + 2 项测试补强：
+
+- **缺陷**：`POST /api/admin/invites` dup 检查 `where(eq(email))[0]` 无排序取
+  第一行——同一 email 存在 accepted（旧）+ pending（新）两行时可能返回
+  accepted 行 → 409 不触发 → insert 撞 `system_invites_pending_email_uidx`
+  23505 → 500。修法：dup 查询加 `isNull(acceptedAt)` 只查 pending 行
+  （`and(eq(email), isNull(acceptedAt))`），原「pending 未过期 → 409；
+  pending 已过期 → 硬删重插」逻辑不变（`!dup.acceptedAt` 条件随过滤下沉
+  移除）。
+- **测试**：补回归场景——accepted 邀请存在时同 email 可再建 pending（200）；
+  该 pending 仍活时再建 → 409（旧代码下复现 `500 !== 409`）。
+- **测试**：410 三路径补 `code` 断言：used → `invite_used`、expired →
+  `invite_expired`、revoked（not_found）→ `invite_not_found`。
+- 证据：修复前红（`500 !== 409`）；修复后同命令连跑两次 4 pass / 0 fail；
+  `npm run typecheck` → exit 0。
+
 ## 未验证 / 跳过
 
 - 未跑浏览器 E2E（本批纯 REST，无 UI；dev:e2e 面向 agent runtime，不需要）。

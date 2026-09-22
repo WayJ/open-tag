@@ -2,7 +2,7 @@
 // inside requires systemRole === "system_admin"). Dispatched between gate 1 and gate 2 in index.ts.
 import type { UserCtx } from "./ctx.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { hashPassword, isValidEmail, newKey } from "../auth.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
@@ -88,9 +88,12 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
     if (b.role !== undefined && !["member", "admin"].includes(String(b.role))) return (sendErr(ctx.res, 400, "role must be member or admin"), true);
     const days = b.expiresInDays != null ? Number(b.expiresInDays) : 7;
     if (!Number.isFinite(days) || days <= 0 || days > 90) return (sendErr(ctx.res, 400, "expiresInDays must be in (0, 90]"), true);
-    const dup = (await db.select().from(schema.systemInvites).where(eq(schema.systemInvites.email, String(b.email).toLowerCase())))[0];
-    if (dup && !dup.acceptedAt && !(dup.expiresAt && new Date(dup.expiresAt as any).getTime() < Date.now())) return (sendErr(ctx.res, 409, "a pending invite for this email already exists"), true);
-    if (dup && !dup.acceptedAt) await db.delete(schema.systemInvites).where(eq(schema.systemInvites.id, dup.id)); // stale expired row: clear it or the pending-email partial unique index would reject the re-invite with a 500
+    // Dup check must consider PENDING rows only: an email can carry an accepted row (history) plus a
+    // live pending one; reading "the first row" could return the accepted one, skip the 409, and blow
+    // up the insert on the pending-email partial unique index with a 500.
+    const dup = (await db.select().from(schema.systemInvites).where(and(eq(schema.systemInvites.email, String(b.email).toLowerCase()), isNull(schema.systemInvites.acceptedAt))))[0];
+    if (dup && !(dup.expiresAt && new Date(dup.expiresAt as any).getTime() < Date.now())) return (sendErr(ctx.res, 409, "a pending invite for this email already exists"), true);
+    if (dup) await db.delete(schema.systemInvites).where(eq(schema.systemInvites.id, dup.id)); // stale expired row: clear it or the pending-email partial unique index would reject the re-invite with a 500
     const [inv] = await db.insert(schema.systemInvites).values({
       email: String(b.email).toLowerCase(), token: newKey("inv_"), serverId: srv.id,
       role: b.role != null ? String(b.role) : "member", createdByUserId: ctx.userId,

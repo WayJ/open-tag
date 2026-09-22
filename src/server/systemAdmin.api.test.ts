@@ -166,19 +166,31 @@ test("system invites: create → info → accept creates account & joins workspa
   const cm = (await db.select().from(schema.channelMembers).where(and(eq(schema.channelMembers.channelId, allCh.id), eq(schema.channelMembers.memberId, me.id))))[0];
   assert.ok(cm);
 
-  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv.invite.token, name: "x", password: "password-1" }) })).status, 410);
+  const usedRes = await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv.invite.token, name: "x", password: "password-1" }) });
+  assert.equal(usedRes.status, 410);
+  assert.equal(((await usedRes.json()) as any).code, "invite_used");
 
   const inv2: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in5-${suffix}@t.local`, serverId: srv.id, expiresInDays: 0.00001 }) })).json();
   await new Promise((r) => setTimeout(r, 1100)); // expiresInDays 0.00001 = ~0.86s — let it actually lapse
-  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv2.invite.token, name: "y", password: "password-1" }) })).status, 410);
+  const expRes = await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv2.invite.token, name: "y", password: "password-1" }) });
+  assert.equal(expRes.status, 410);
+  assert.equal(((await expRes.json()) as any).code, "invite_expired");
   // re-invite after expiry replaces the stale row (pending-email unique index must not 500)
   const inv2b: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in5-${suffix}@t.local`, serverId: srv.id }) })).json();
   assert.ok(inv2b.invite?.token && inv2b.invite.token !== inv2.invite.token);
 
   const inv3: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in6-${suffix}@t.local`, serverId: srv.id }) })).json();
   assert.equal((await api(`/api/admin/invites/${inv3.invite.id}`, { method: "DELETE", headers: hdr })).status, 200);
-  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv3.invite.token, name: "z", password: "password-1" }) })).status, 410);
+  const revRes = await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv3.invite.token, name: "z", password: "password-1" }) });
+  assert.equal(revRes.status, 410);
+  assert.equal(((await revRes.json()) as any).code, "invite_not_found");
   assert.equal((await api(`/api/admin/invites/${inv3.invite.id}`, { method: "DELETE", headers: hdr })).status, 404);
+
+  // an accepted invite leaves room for a fresh pending one on the same email; while that pending
+  // lives, another create must 409 (regression: the dup check used to read the first row only —
+  // possibly the accepted one — skip the 409, and blow up on the pending-email unique index with a 500)
+  assert.equal((await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in4-${suffix}@t.local`, serverId: srv.id }) })).status, 200);
+  assert.equal((await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in4-${suffix}@t.local`, serverId: srv.id }) })).status, 409);
 
   // admin list shows statuses
   const list: any = await (await api("/api/admin/invites", { headers: hdr })).json();
