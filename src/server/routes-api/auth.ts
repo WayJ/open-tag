@@ -83,6 +83,7 @@ export async function handlePublicAuth(ctx: BaseCtx): Promise<boolean> {
     const u = (await db.select().from(schema.users).where(eq(schema.users.email, b.email)))[0];
     if (!u) return (sendErr(res, 404, "email not found", { code: "auth_login_email_not_found" }), true);
     if (!verifyPassword(b.password, u.passwordHash)) return (sendErr(res, 401, "password incorrect", { code: "auth_login_password_wrong" }), true);
+    if (u.disabledAt) return (sendErr(res, 403, "account disabled", { code: "auth_account_disabled" }), true);
     return (sendJson(res, 200, { token: signUser(u.id), user: { id: u.id, name: u.name } }), true);
   }
   // Invite info (public, no auth required): the /join/:token landing page uses this to display "X invited you to join workspace Y"
@@ -122,7 +123,7 @@ export async function handleAuthedAuth(ctx: UserCtx): Promise<boolean> {
 
   if (p === "/api/auth/me" && method === "GET") {
     const u = (await db.select().from(schema.users).where(eq(schema.users.id, userId)))[0];
-    return (u ? sendJson(res, 200, { id: u.id, name: u.name, displayName: u.displayName, email: u.email, description: u.description, avatarUrl: u.avatarUrl }) : sendErr(res, 404, "not found"), true);
+    return (u ? sendJson(res, 200, { id: u.id, name: u.name, displayName: u.displayName, email: u.email, description: u.description, avatarUrl: u.avatarUrl, systemRole: u.systemRole ?? null }) : sendErr(res, 404, "not found"), true);
   }
   if (p === "/api/auth/me" && method === "PATCH") {
     const b = await readJson(req); const patch: Record<string, unknown> = {};

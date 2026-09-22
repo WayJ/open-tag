@@ -1,6 +1,6 @@
 // User-facing REST: /api/*  (Bearer JWT + x-server-id)
 //
-// Thin dispatcher. It owns ONLY the three auth gates and the dispatch order; the actual route
+// Thin dispatcher. It owns ONLY the auth gates and the dispatch order; the actual route
 // logic lives in the per-domain handlers in this directory. Each gate widens the context
 // (public → +userId → +serverId, see ./ctx.ts) and then delegates to the handlers registered
 // behind that gate. A handler returns `true` once it has matched a route and written the
@@ -17,9 +17,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { sendErr, bearer, serverIdHeader } from "../util.js";
-import { verifyUser } from "../auth.js";
+import { resolveActiveUser } from "../auth.js";
 import type { BaseCtx, UserCtx, ServerCtx } from "./ctx.js";
 import { handlePublicAuth, handleAuthedAuth } from "./auth.js";
+import { handleAdminRoutes } from "./admin.js";
 import { handlePublicAttachmentGet, handleAttachments } from "./attachments.js";
 import { handleServersUserScope, handleServersServerScope } from "./servers.js";
 import { handleAgents } from "./agents.js";
@@ -37,11 +38,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, url: 
   if (await handlePublicAuth(base)) return true;
   if (await handlePublicAttachmentGet(base)) return true;
 
-  // ---- gate 1: require a logged-in user ----
-  const userId = verifyUser(bearer(req));
-  if (!userId) return (sendErr(res, 401, "unauthorized"), true);
+  // ---- gate 1: require a logged-in, non-disabled user ----
+  const activeUser = await resolveActiveUser(bearer(req));
+  if (!activeUser) return (sendErr(res, 401, "unauthorized"), true);
+  const userId = activeUser.id; // gate 2 below reads this
   const user: UserCtx = { ...base, userId };
   if (await handleAuthedAuth(user)) return true;
+  if (await handleAdminRoutes(user, activeUser.systemRole)) return true; // gate 1.5: system-admin namespace, no x-server-id
   if (await handleServersUserScope(user)) return true;
 
   // ---- gate 2: require a server context + membership ----

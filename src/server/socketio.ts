@@ -6,7 +6,7 @@ import { Server as IOServer, type Socket } from "socket.io";
 import type { Server } from "node:http";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
-import { verifyUser } from "./auth.js";
+import { resolveActiveUser } from "./auth.js";
 import { canUserReadChannel } from "./channelAccess.js";
 import { createLogger } from "../log.js";
 
@@ -33,7 +33,7 @@ export function attachSocketIO(server: Server): void {
   io = new IOServer(server, { cors: { origin: socketIoCorsOrigin() }, path: "/socket.io/" });
   io.on("connection", async (socket: Socket) => {
     const auth = (socket.handshake.auth || {}) as { token?: string; serverId?: string };
-    const uid = verifyUser(auth.token ?? null);
+    const uid = (await resolveActiveUser(auth.token ?? null))?.id ?? null;
     const serverId = auth.serverId;
     if (!uid || !serverId) { socket.disconnect(true); return; }
     const mem = (await db.select().from(schema.serverMembers)

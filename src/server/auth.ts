@@ -85,3 +85,17 @@ export async function resolveAgent(token: string | null, agentId: string | null)
   if (safeEqual(hashToken(token), agent.agentTokenHash)) return agent;
   return null;
 }
+
+/** Gate-1 user resolution: JWT verify → live user row → reject soft-disabled accounts.
+ *  Single source of truth for "is this token's user currently allowed in" — used by REST gate 1,
+ *  the socket.io handshake, and the public-attachment token path, so a disabled user loses ALL
+ *  access with the flip of disabledAt, even for already-issued 30d JWTs. Returns the row (id +
+ *  systemRole) so the admin gate reuses it without a second query. */
+export async function resolveActiveUser(token: string | null) {
+  const userId = verifyUser(token);
+  if (!userId) return null;
+  const u = (await db.select({ id: schema.users.id, systemRole: schema.users.systemRole, disabledAt: schema.users.disabledAt })
+    .from(schema.users).where(eq(schema.users.id, userId)))[0];
+  if (!u || u.disabledAt) return null;
+  return u;
+}
