@@ -202,10 +202,10 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
 - Modify: `Dockerfile`（build 阶段 :20 追加 `npm run pkg:daemon:build`；runtime 阶段在拷 `packages/daemon/package.json` 处一并 COPY `packages/daemon/dist`，从 build stage 拷）
 - Modify: `scripts/prod-up.sh:16`（`site:build` 后加 `npm run pkg:daemon:build`）
 
-- [ ] Step 1: Dockerfile 两处修改（`.dockerignore` 排除 `dist` 无碍 —— bundle 在镜像内构建）
-- [ ] Step 2: prod-up.sh 加构建行
-- [ ] Step 3: 本地验证可跑：worktree 内 `npm run pkg:daemon:build` 产出存在
-- [ ] Step 4: Commit `build: ship daemon bundle in deploy image + prod-up`
+- [x] Step 1: Dockerfile 两处修改（`.dockerignore` 排除 `dist` 无碍 —— bundle 在镜像内构建）
+- [x] Step 2: prod-up.sh 加构建行
+- [x] Step 3: 本地验证可跑：worktree 内 `npm run pkg:daemon:build` 产出存在
+- [x] Step 4: Commit `build: ship daemon bundle in deploy image + prod-up`
 
 ### Task 5: 文档同步（doc-sync 硬规则）
 
@@ -217,8 +217,8 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
 - Modify: `docs/self-host.md`、`docs/self-host-windows.md`（连接命令示例换新）
 - Modify: `docs/authorization.md`（公开端点清单加 `/daemon/cli.mjs`，说明无密钥）
 
-- [ ] Step 1: 逐文件更新
-- [ ] Step 2: Commit `docs: sync for server-distributed daemon bundle`
+- [x] Step 1: 逐文件更新
+- [x] Step 2: Commit `docs: sync for server-distributed daemon bundle`
 
 ### Task 6: 端到端验证（verification-before-completion）
 
