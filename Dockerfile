@@ -18,6 +18,9 @@ RUN npm --prefix docs-site ci
 COPY . .
 # Keep dev dependencies installed above, but select production exports for browser bundles.
 RUN NODE_ENV=production npm run site:build
+# Self-contained daemon bundles, served by the server at /daemon/cli.mjs + /daemon/agent-cli.mjs.
+# packages/daemon/dist is gitignored, so it must be built here rather than COPY'd from the context.
+RUN npm run pkg:daemon:build
 
 # ---- runtime stage: source + root node_modules + built client/docs, run with tsx ----
 FROM node:22-slim AS runtime
@@ -32,6 +35,10 @@ COPY --from=build /app/docs-site/dist ./docs-site/dist
 COPY --from=build /app/src ./src
 # daemon package.json: read at runtime for latestDaemonVersion (system-alert "outdated daemon" check); only the manifest is needed.
 COPY --from=build /app/packages/daemon/package.json ./packages/daemon/package.json
+# daemon bundles: served over HTTP so target machines install from THIS server instead of npm. Path is
+# load-bearing — src/server/daemonBundle.ts resolves ../../packages/daemon/dist from src/server, i.e.
+# /app/packages/daemon/dist.
+COPY --from=build /app/packages/daemon/dist ./packages/daemon/dist
 COPY --from=build /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/package.json ./package.json

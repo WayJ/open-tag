@@ -15,6 +15,11 @@ sleep 1
 echo "→ building site (web/dist + docs-site/dist are served by the server)…"
 npm run site:build >/dev/null
 
+# Daemon bundles (packages/daemon/dist, gitignored) are served at /daemon/*.mjs so target machines
+# install from this server's code — rebuild them, never serve a stale local build.
+echo "→ building daemon bundles (packages/daemon/dist served at /daemon/*.mjs)…"
+npm run pkg:daemon:build >/dev/null
+
 # Migrate the DB schema to the code BEFORE the new server starts. Skipping this is how a prod:up
 # once shipped code whose onConflict / new columns hit a not-yet-migrated DB → runtime 500s (agent
 # create failed on a missing partial unique index added by a merged-but-unmigrated schema change).
