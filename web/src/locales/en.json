@@ -588,8 +588,20 @@
       "audit": "Audit log",
       "settings": "Settings"
     },
+    "stats": {
+      "totalUsers": "Total users",
+      "disabledUsers": "Disabled"
+    },
+    "menu": {
+      "disableUser": "Disable user",
+      "enableUser": "Enable user",
+      "promote": "Grant sysadmin",
+      "demote": "Revoke sysadmin",
+      "resetPassword": "Reset password"
+    },
     "users": {
       "search": "Search email/username (Enter)",
+      "inviteCta": "＋ Invite user",
       "email": "Email",
       "role": "System role",
       "status": "Status",
