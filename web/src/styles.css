@@ -1097,8 +1097,8 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
 .adm { display: flex; height: 100vh; }
 .adm-side { width: var(--adm-side-w); flex: none; background: var(--canvas-soft); border-right: 1px solid var(--hair); display: flex; flex-direction: column; padding: 14px 10px; }
 .adm-side .logo { font-size: 13px; font-weight: 700; padding: 0 6px; margin-bottom: 14px; color: var(--ink); }
-.adm-side .sec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-soft); padding: 10px 8px 4px; }
-.adm-side a { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 6px; font-size: 13px; color: var(--body); margin-bottom: 1px; cursor: pointer; }
+.adm-sec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-soft); padding: 10px 8px 4px; }
+.adm-side a { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 6px; font-size: 13px; color: var(--body); margin-bottom: 1px; cursor: pointer; text-decoration: none; }
 .adm-side a:hover { background: var(--surface-strong); }
 .adm-side a.on { background: var(--ink); color: var(--on-ink); }
 .adm-side .foot { margin-top: auto; border-top: 1px solid var(--hair); padding-top: 10px; }
@@ -1163,7 +1163,7 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
 @media (max-width: 768px) {
   .adm { flex-direction: column; height: auto; min-height: 100vh; }
   .adm-side { width: 100%; flex-direction: row; align-items: center; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--hair); padding: 8px 12px; }
-  .adm-side .logo, .adm-side .sec, .adm-side .foot { display: none; }
+  .adm-side .logo, .adm-sec, .adm-side .foot { display: none; }
   .adm-side a { margin: 0 2px 0 0; white-space: nowrap; }
   .adm-main { padding: 14px; }
 }

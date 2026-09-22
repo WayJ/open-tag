@@ -45,6 +45,24 @@
 
 `web/package-lock.json` 全程未提交（npm 触碰后已 `git checkout --` 恢复）。
 
+## 评审跟进（commit `fix(web): batch-A review follow-ups`）
+
+质量评审通过后三项收尾修复：
+
+1. **`.adm-side .sec` 与全局 `.sec`（styles.css:98）冲突**：全局 `.sec` 带
+   `margin:18px 4px 6px` + `display:flex` + `font-weight:600`，会漏进 admin 侧栏
+   分节标题。类名改为独立前缀 `.adm-sec`（定义 + 768px 响应式隐藏两处；组件尚无
+   消费者，零接线成本）。
+2. **`.adm-side a` 补 `text-decoration: none`**：仓库无全局锚点重置，Task 3 用
+   Link 渲染 `<a>` 会带浏览器默认下划线。
+3. **`avatarTone` 开头 `email = email.toLowerCase()`**：大小写归一化 —— 同一邮箱
+   不同大小写形式命中同一 tone。
+
+验证：avatar 测试 2 pass / 0 fail、typecheck（root+web）、web build 全绿。
+
+评审 Minor 3/4/7（卡片圆角出血、modal 小屏 min-width、宽表横向滚动）按评审结论
+留给采用批（Tasks 4-6）与 Task 8 走查时按给定方案处理，本批不动。
+
 ## 备注 / 后续
 
 - 组件本批故意不接线 —— Tabs 采用发生在 Tasks 4-6，届时删除各 tab 的 inline styles。

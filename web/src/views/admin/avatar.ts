@@ -3,6 +3,7 @@ const TONES = ["g-mint", "g-lav", "g-sky", "g-peach"] as const;
 export type AvatarTone = (typeof TONES)[number];
 
 export function avatarTone(email: string): AvatarTone {
+  email = email.toLowerCase(); // case-normalize: same mailbox, same tone
   let h = 0;
   for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) | 0;
   return TONES[Math.abs(h) % TONES.length];
