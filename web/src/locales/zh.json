@@ -579,6 +579,8 @@
     "title": "系统管理",
     "subtitle": "部署级管理控制台",
     "entry": "系统管理",
+    "navGroup": "管理",
+    "backToWorkspace": "返回工作区",
     "tab": {
       "users": "用户",
       "invites": "邀请",
