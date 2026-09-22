@@ -27,7 +27,7 @@ export async function handlePublicAuth(ctx: BaseCtx): Promise<boolean> {
     const mine = (await db.select().from(schema.servers).where(eq(schema.servers.ownerId, u!.id)))[0];
     if (!mine) await createServer(`${name}'s workspace`, `u-${u!.id.slice(0, 8)}`, u!.id);
     if (!u) return (sendErr(res, 500, "dev-login failed"), true);
-    return (sendJson(res, 200, { token: signUser(u!.id), user: { id: u!.id, name: u!.name, displayName: u!.displayName } }), true);
+    return (sendJson(res, 200, { token: signUser(u!.id), user: { id: u!.id, name: u!.name, displayName: u!.displayName, systemRole: u!.systemRole ?? null } }), true);
   }
   // First-deploy admin setup: one-time, token-gated. Disabled (404) unless ADMIN_SETUP_TOKEN is configured.
   // First-run guard: only initializes the seeded default-workspace owner while it still has no password — so it
