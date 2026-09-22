@@ -544,7 +544,11 @@
       "auth_register_username_taken": "这个用户名已被占用。换一个 @ 提及名。",
       "auth_rate_limited": "尝试次数太多。等一分钟后再试。",
       "auth_registration_closed": "注册已关闭——请联系系统管理员获取邀请。",
-      "auth_account_disabled": "该账号已被禁用。请联系系统管理员。"
+      "auth_account_disabled": "该账号已被禁用。请联系系统管理员。",
+      "invite_used": "该邀请已被使用。",
+      "invite_expired": "该邀请已过期。",
+      "invite_not_found": "邀请链接无效。",
+      "invite_revoked": "该邀请已被撤销。"
     },
     "opFailed": "操作失败",
     "joinFailed": "加入失败",
@@ -561,7 +565,16 @@
     "loginAndJoin": "登录并加入",
     "hasAccount": "已有账号？",
     "noAccount": "没有账号？",
-    "newUser": "新用户？"
+    "newUser": "新用户？",
+    "registrationClosed": "注册已关闭",
+    "registrationClosedDesc": "本部署已关闭自助注册。如需账号，请联系系统管理员获取邀请链接。",
+    "toLogin": "去登录",
+    "inviteTitle": "加入 {{serverName}}",
+    "inviteIntro": "（{{email}}）加入工作区「{{serverName}}」，角色 {{role}}。设置用户名和密码即可完成加入。",
+    "inviteJoin": "创建账号并加入",
+    "inviteInvalidTitle": "邀请无效",
+    "inviteInvalid": "该邀请链接不存在、已被撤销、已用或已过期。",
+    "inviteFailed": "接受邀请失败"
   },
   "admin": {
     "title": "系统管理",

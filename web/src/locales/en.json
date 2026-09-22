@@ -544,7 +544,11 @@
       "auth_register_username_taken": "That username is taken. Choose another @mention name.",
       "auth_rate_limited": "Too many attempts. Wait a minute and try again.",
       "auth_registration_closed": "Registration is closed — ask a system admin for an invite.",
-      "auth_account_disabled": "This account has been disabled. Contact a system admin."
+      "auth_account_disabled": "This account has been disabled. Contact a system admin.",
+      "invite_used": "This invite has already been used.",
+      "invite_expired": "This invite has expired.",
+      "invite_not_found": "This invite link is invalid.",
+      "invite_revoked": "This invite has been revoked."
     },
     "opFailed": "Operation failed",
     "joinFailed": "Failed to join",
@@ -561,7 +565,16 @@
     "loginAndJoin": "Sign in & join",
     "hasAccount": "Already have an account? ",
     "noAccount": "No account? ",
-    "newUser": "New user? "
+    "newUser": "New user? ",
+    "registrationClosed": "Registration is closed",
+    "registrationClosedDesc": "Self-serve sign-up is disabled on this deployment. Ask a system admin for an invite link.",
+    "toLogin": "Go to sign in",
+    "inviteTitle": "Join {{serverName}}",
+    "inviteIntro": " ({{email}}) to join workspace \"{{serverName}}\", role {{role}}. Set a username and password to finish.",
+    "inviteJoin": "Create account & join",
+    "inviteInvalidTitle": "Invalid invite",
+    "inviteInvalid": "This invite link does not exist, or has been revoked, used, or expired.",
+    "inviteFailed": "Failed to accept the invite"
   },
   "admin": {
     "title": "System admin",
