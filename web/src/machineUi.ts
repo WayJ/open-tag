@@ -40,9 +40,8 @@ export const KEY_PLACEHOLDER = "<your sk_machine_... key>";
 const BUNDLE_CMD_BASH = "curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag-daemon.mjs && node /tmp/open-tag-daemon.mjs --server-url {origin} --api-key {key}";
 const BUNDLE_CMD_POWERSHELL = "Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\\open-tag-daemon.mjs; node \"$env:TEMP\\open-tag-daemon.mjs\" --server-url {origin} --api-key {key}";
 
-function renderDaemonCommand(template: string | null | undefined, origin: string, key: string): string {
-  const tpl = typeof template === "string" && template.trim() ? template : DEFAULT_DAEMON_COMMAND;
-  return tpl.split("{origin}").join(origin).split("{key}").join(key);
+function renderDaemonCommand(template: string, origin: string, key: string): string {
+  return template.split("{origin}").join(origin).split("{key}").join(key);
 }
 
 // What the UI renders to install/run a daemon: either one custom command string (env template override,
@@ -51,7 +50,11 @@ export type DaemonCommandSet =
   | { kind: "custom"; command: string }
   | { kind: "platform"; bash: string; powershell: string };
 
-function buildDaemonCommandSet(origin: string, key: string, opts: { template?: string | null; bundleAvailable?: boolean }): DaemonCommandSet {
+// Shared opts for the public command builders: `template` = OPEN_TAG_DAEMON_CMD_TEMPLATE override
+// (blank/null = none), `bundleAvailable` = the server's daemonBundleAvailable flag.
+export type DaemonCommandOpts = { template?: string | null; bundleAvailable?: boolean };
+
+function buildDaemonCommandSet(origin: string, key: string, opts: DaemonCommandOpts): DaemonCommandSet {
   const template = typeof opts.template === "string" && opts.template.trim() ? opts.template : null;
   if (template) return { kind: "custom", command: renderDaemonCommand(template, origin, key) };
   if (opts.bundleAvailable) return {
@@ -64,10 +67,10 @@ function buildDaemonCommandSet(origin: string, key: string, opts: { template?: s
 
 // The connect command set with a real machine key filled in (the connect-computer wizard has the
 // freshly-minted key; daemonUpdateCommands keeps a placeholder for the key-not-shown update flow).
-export function daemonConnectCommands(origin: string, key: string, opts: { template?: string | null; bundleAvailable?: boolean }): DaemonCommandSet {
+export function daemonConnectCommands(origin: string, key: string, opts: DaemonCommandOpts): DaemonCommandSet {
   return buildDaemonCommandSet(origin, key, opts);
 }
 
-export function daemonUpdateCommands(origin: string, opts: { template?: string | null; bundleAvailable?: boolean }): DaemonCommandSet {
+export function daemonUpdateCommands(origin: string, opts: DaemonCommandOpts): DaemonCommandSet {
   return buildDaemonCommandSet(origin, KEY_PLACEHOLDER, opts);
 }

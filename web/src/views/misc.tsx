@@ -11,8 +11,9 @@ import { PaneEmpty } from "../PaneEmpty.tsx";
 import { ConnectComputerWizard } from "./ConnectComputerWizard.tsx";
 import { useConfirm, useEscClose } from "../ConfirmModal.tsx";
 import { useTranslation } from "react-i18next";
-import { daemonUpdateCommandTemplate, isDaemonUpdateAvailable } from "../machineUi.ts";
+import { daemonUpdateCommands, isDaemonUpdateAvailable } from "../machineUi.ts";
 import { copyText } from "../lib/clipboard.ts";
+import { CommandTabs } from "./CommandTabs.tsx";
 import { useToast } from "../toast.tsx";
 
 export function Tasks() {
@@ -278,13 +279,8 @@ export function Computers() {
 function DaemonUpdateModal({ onClose, machine }: { onClose: () => void; machine: { id: string; name: string; currentVersion: string; latestVersion: string; apiKeyPrefix?: string } }) {
   useEscClose(onClose);
   const { t } = useTranslation();
-  const { daemonCommandTemplate } = useStore();
-  const [copied, setCopied] = useState(false);
-  const cmd = daemonUpdateCommandTemplate(window.location.origin, daemonCommandTemplate);
-  const copy = async () => {
-    if (!await copyText(cmd)) { window.prompt(t("misc.connectModalCopyBtn"), cmd); return; }
-    setCopied(true); setTimeout(() => setCopied(false), 1500);
-  };
+  const { daemonCommandTemplate, daemonBundleAvailable } = useStore();
+  const cmd = daemonUpdateCommands(window.location.origin, { template: daemonCommandTemplate, bundleAvailable: daemonBundleAvailable });
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -296,7 +292,7 @@ function DaemonUpdateModal({ onClose, machine }: { onClose: () => void; machine:
           {machine.apiKeyPrefix && <p>{t("misc.updateDaemonModalKeyPrefix", { prefix: machine.apiKeyPrefix })}</p>}
         </div>
         <label>{t("misc.updateDaemonModalCmdLabel")}</label>
-        <div className="codebox"><code className="grow">{cmd}</code><button className="joinbtn" onClick={copy}>{copied ? t("misc.connectModalCopied") : t("misc.connectModalCopyBtn")}</button></div>
+        <CommandTabs set={cmd} />
         <p className="modal-note">{t("misc.updateDaemonModalPlaceholderNote")}</p>
         <div className="acts"><button className="ok" onClick={onClose}>{t("misc.connectModalDone")}</button></div>
       </div>

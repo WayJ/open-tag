@@ -36,6 +36,7 @@ interface Store {
   loadMentionCandidates: (channelId: string) => Promise<void>;    // lazy fetch-on-first-@ (idempotent, fail-closed to [])
   latestDaemonVersion: string;                                    // newest published daemon version (packages/daemon); online machines below it are flagged outdated in the system-alert center
   daemonCommandTemplate: string | null;                          // optional OPEN_TAG_DAEMON_CMD_TEMPLATE override for the connect/update command shown in the UI; null → @latest npx command
+  daemonBundleAvailable: boolean;                                // server distributes the daemon bundle (GET /daemon/cli.mjs) → connect/update UI shows per-platform download-and-run commands instead of the npx fallback
   api: (m: string, p: string, b?: unknown) => Promise<any>;
   reload: () => Promise<void>;
   onEvent: (cb: (e: Ev) => void) => () => void;
@@ -98,6 +99,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [latestDaemonVersion, setLatestDaemonVersion] = useState(""); // newest published daemon version from the machines endpoint; "" until first load (→ raises no outdated alert)
   const [daemonCommandTemplate, setDaemonCommandTemplate] = useState<string | null>(null); // OPEN_TAG_DAEMON_CMD_TEMPLATE from the machines endpoint; null → default @latest npx command
+  const [daemonBundleAvailable, setDaemonBundleAvailable] = useState(false); // daemonBundleAvailable from the machines endpoint; true → platform bundle commands in connect/update UI
   const [humans, setHumans] = useState<Human[]>([]);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const savedMutationsRef = useRef(new Map<string, Promise<SavedMutationResult>>());
@@ -146,7 +148,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try { const dm = await api("GET", "/api/channels/dm"); if (fresh()) setDms(dm); } catch { if (fresh()) setDms([]); }
     await unreadRefresh?.request();
     const ag = await api("GET", "/api/agents"); if (fresh()) setAgents(ag);
-    try { const mc = await api("GET", `/api/servers/${sid}/machines`); if (fresh()) { setMachines(mc.machines || []); setLatestDaemonVersion(mc.latestDaemonVersion || ""); setDaemonCommandTemplate(typeof mc.daemonCommandTemplate === "string" ? mc.daemonCommandTemplate : null); } } catch { if (fresh()) setMachines([]); }
+    try { const mc = await api("GET", `/api/servers/${sid}/machines`); if (fresh()) { setMachines(mc.machines || []); setLatestDaemonVersion(mc.latestDaemonVersion || ""); setDaemonCommandTemplate(typeof mc.daemonCommandTemplate === "string" ? mc.daemonCommandTemplate : null); setDaemonBundleAvailable(!!mc.daemonBundleAvailable); } } catch { if (fresh()) setMachines([]); }
     try { const hm = await api("GET", `/api/servers/${sid}/members`); if (fresh()) setHumans(hm); } catch { if (fresh()) setHumans([]); }
   };
   const onEvent = (cb: (e: Ev) => void) => { listeners.current.add(cb); return () => { listeners.current.delete(cb); }; };
@@ -390,7 +392,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Machine online/offline → reload machine list (DB is source of truth for status/daemon version/runtimes/new rows).
       // Note: machine:status payload omits id (only forwards {online,hostname,runtimes}), so targeted row update is not possible → full reload is safest.
       sock.on("machine:status", async (p: any) => {
-        try { const mc = await api("GET", `/api/servers/${sidRef.current}/machines`); setMachines(mc.machines || []); setLatestDaemonVersion(mc.latestDaemonVersion || ""); setDaemonCommandTemplate(typeof mc.daemonCommandTemplate === "string" ? mc.daemonCommandTemplate : null); } catch { /* keep stale value on error */ }
+        try { const mc = await api("GET", `/api/servers/${sidRef.current}/machines`); setMachines(mc.machines || []); setLatestDaemonVersion(mc.latestDaemonVersion || ""); setDaemonCommandTemplate(typeof mc.daemonCommandTemplate === "string" ? mc.daemonCommandTemplate : null); setDaemonBundleAvailable(!!mc.daemonBundleAvailable); } catch { /* keep stale value on error */ }
         dispatch({ type: "machine", ...p });
       });
       sock.on("task:created", (p: any) => (p.tasks || []).forEach((t: any) => dispatch({ type: "task", op: "created", task: t }))); // payload={channelId,tasks:[]}
@@ -416,5 +418,5 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Showcase demo agents (creatorType="system") stay in `agents` so #showcase history still resolves their
   // avatar/name/profile by id — but they are not real members, so every roster / picker uses `visibleAgents`.
   const visibleAgents = agents.filter((a) => a.creatorType !== "system");
-  return <Ctx.Provider value={{ ready, authState, serverId, slug, me, myRole, serverAvatar, servers, capabilities, createServer, switchServer, logout, uploadServerAvatar, uploadAgentAvatar, uploadUserAvatar, channels, dms, unread, agents, visibleAgents, machines, latestDaemonVersion, daemonCommandTemplate, humans, mentionCandidatesByChannel, loadMentionCandidates, api, reload, onEvent, subscribeChannel, createChannel, markActionExecuted, createTasks, openDM, joinChannel, leaveChannel, markRead, uploadFiles, uploadOne, attachmentUrl, react, openThread, openAgentPanel, agentPanelReq, clearAgentPanelReq, savedIds, saveMsg, unsaveMsg, listSaved }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ ready, authState, serverId, slug, me, myRole, serverAvatar, servers, capabilities, createServer, switchServer, logout, uploadServerAvatar, uploadAgentAvatar, uploadUserAvatar, channels, dms, unread, agents, visibleAgents, machines, latestDaemonVersion, daemonCommandTemplate, daemonBundleAvailable, humans, mentionCandidatesByChannel, loadMentionCandidates, api, reload, onEvent, subscribeChannel, createChannel, markActionExecuted, createTasks, openDM, joinChannel, leaveChannel, markRead, uploadFiles, uploadOne, attachmentUrl, react, openThread, openAgentPanel, agentPanelReq, clearAgentPanelReq, savedIds, saveMsg, unsaveMsg, listSaved }}>{children}</Ctx.Provider>;
 }

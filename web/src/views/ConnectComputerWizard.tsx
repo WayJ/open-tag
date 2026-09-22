@@ -3,8 +3,8 @@ import { useStore } from "../store.tsx";
 import { useTranslation } from "react-i18next";
 import { IconMonitor } from "../icons.tsx";
 import { CheckCircle2 } from "lucide-react";
-import { daemonConnectCommand } from "../machineUi.ts";
-import { copyText } from "../lib/clipboard.ts";
+import { daemonConnectCommands, type DaemonCommandSet } from "../machineUi.ts";
+import { CommandTabs } from "./CommandTabs.tsx";
 
 // Self-contained onboarding nudge state (reused from the old AddComputerModal): once-per-tab session
 // dismiss + a permanent global opt-out checkbox. Only the "onboard" mode reads/writes these.
@@ -21,7 +21,7 @@ type Step = "intro" | "connect" | "connected";
 //   add       → parent-mounted (Computers "+"); starts at connect.
 //   reconnect → parent-mounted; rotates the key on an existing offline machine; starts at connect.
 export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; machine?: { id: string; name: string }; onClose?: () => void }) {
-  const { machines, capabilities, api, serverId, reload, daemonCommandTemplate } = useStore();
+  const { machines, capabilities, api, serverId, reload, daemonCommandTemplate, daemonBundleAvailable } = useStore();
   const { t } = useTranslation();
 
   const [dontRemind, setDontRemind] = useState(false);
@@ -33,7 +33,6 @@ export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; 
   const [res, setRes] = useState<{ id: string; key: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [genErr, setGenErr] = useState("");
-  const [copied, setCopied] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [renameErr, setRenameErr] = useState("");
@@ -98,11 +97,7 @@ export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; 
     if (step === "connect" && res && isOnline) { setNameInput(mode === "reconnect" ? (machine?.name ?? "") : ""); setStep("connected"); }
   }, [step, res, isOnline, mode, machine]);
 
-  const cmd = res ? daemonConnectCommand(window.location.origin, res.key, daemonCommandTemplate) : "";
-  const copy = async (text: string) => {
-    if (!await copyText(text)) { window.prompt(t("misc.connectModalCopyBtn"), text); return; }
-    setCopied(true); setTimeout(() => setCopied(false), 1500);
-  };
+  const cmd: DaemonCommandSet | null = res ? daemonConnectCommands(window.location.origin, res.key, { template: daemonCommandTemplate, bundleAvailable: daemonBundleAvailable }) : null;
 
   const finish = async () => {
     // Empty input means "use the hostname" (matches the placeholder) — otherwise the machine would keep the
@@ -142,11 +137,11 @@ export function ConnectComputerWizard({ mode, machine, onClose }: { mode: Mode; 
           {genErr ? (<>
             <p className="form-err">{genErr}</p>
             <div className="acts"><button className="cancel" onClick={close}>{t("misc.connectModalCancel")}</button><button className="ok" onClick={gen} disabled={busy}>{busy ? t("misc.connectModalGenerating") : t("misc.wizardRetry")}</button></div>
-          </>) : !res ? (
+          </>) : !res || !cmd ? (
             <div className="wiz-wait"><span className="wiz-pulse" /> {t("misc.connectModalGenerating")}</div>
           ) : (<>
             <label>{t("misc.wizardCmdIntro")}</label>
-            <div className="codebox"><code className="grow">{cmd}</code><button className="joinbtn" onClick={() => copy(cmd)}>{copied ? t("misc.connectModalCopied") : t("misc.connectModalCopyBtn")}</button></div>
+            <CommandTabs set={cmd} />
             <div className="wiz-wait"><span className="wiz-pulse" /> {t("misc.wizardWaiting")}</div>
             <div className="acts"><button className="cancel" onClick={close}>{t("misc.connectModalCancel")}</button></div>
           </>)}
