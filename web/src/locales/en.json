@@ -577,7 +577,6 @@
   },
   "admin": {
     "title": "System admin",
-    "subtitle": "Deployment-level admin console",
     "entry": "System admin",
     "navGroup": "System",
     "backToWorkspace": "Back to workspace",
@@ -613,8 +612,6 @@
       "sysAdmin": "System admin",
       "active": "Active",
       "disabled": "Disabled",
-      "enable": "Enable",
-      "disable": "Disable",
       "promote": "Make admin",
       "promoteConfirm": "Make {{email}} a system admin?",
       "promoteMessage": "System admins manage every user, invite, workspace, and deployment setting.",
@@ -650,13 +647,9 @@
       "expires": "Expires (days, 1-90)",
       "create": "Create invite",
       "creating": "Creating…",
-      "createdTitle": "Invite created",
-      "createdNote": "Send the link to the invitee — they open it, set a username and password, and land in the target workspace. The link works until it expires or is accepted.",
-      "linkLabel": "Invite link",
       "copy": "Copy",
       "copied": "Copied",
       "listEmpty": "No invites yet.",
-      "createdAt": "created",
       "expiresAt": "expires",
       "status": {
         "pending": "pending",
@@ -668,7 +661,6 @@
       "revokeMessage": "The invite link stops working immediately."
     },
     "workspaces": {
-      "statsUsers": "Users",
       "statsServers": "Workspaces",
       "statsAgents": "Agents (active/total)",
       "statsMachines": "Machines (online/total)",
