@@ -16,6 +16,7 @@ import { reconcileMachinesOnBoot, startMachineSweeper } from "./machineLiveness.
 import { sendJson, sendErr } from "./util.js";
 import { createLogger } from "../log.js";
 import { shouldServeAppShell } from "./staticRoutes.js";
+import { serveDaemonBundle } from "./daemonBundle.js";
 import { dispatchConversationTurn } from "./core.js";
 import { startConversationTurnScheduler } from "./conversationTurns.js";
 
@@ -118,6 +119,7 @@ const server = http.createServer(async (req, res) => {
   res.on("finish", () => log.debug("req", { method, path: url.pathname, status: res.statusCode, ms: Date.now() - t0 }));
   try {
     if (url.pathname === "/health") return sendJson(res, 200, { ok: true, service: "open-tag", time: new Date().toISOString() });
+    if ((method === "GET" || method === "HEAD") && url.pathname === "/daemon/cli.mjs") return void await serveDaemonBundle(res, method === "HEAD");
     if (await handleAgentApi(req, res, url, method)) return;
     if (await handleApi(req, res, url, method)) return;
     const isRead = method === "GET" || method === "HEAD";

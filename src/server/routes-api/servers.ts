@@ -9,6 +9,7 @@ import { publish } from "../realtime.js";
 import { CODEX_FALLBACK_MODELS, DYNAMIC_RUNTIMES, getDynamicModels } from "../runtimeModels.js";
 import { PROJECT_BROWSER_CAPABILITY, requestDaemonByMachine } from "../daemonHub.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
+import { daemonBundleExists } from "../daemonBundle.js";
 import { createRequire } from "node:module";
 
 // Single source of truth for the newest published daemon version (packages/daemon/package.json). The web client
@@ -233,7 +234,7 @@ export async function handleServersServerScope(ctx: ServerCtx): Promise<boolean>
       return (sendJson(res, 200, users.map((u) => ({ userId: u.id, name: u.name, displayName: u.displayName, description: u.description, avatarUrl: u.avatarUrl, role: rows.find((r) => r.userId === u.id)?.role }))), true);
     }
     const machines = await db.select().from(schema.machines).where(eq(schema.machines.serverId, serverId));
-    return (sendJson(res, 200, { machines: machines.map((m) => ({ id: m.id, name: m.name, hostname: m.hostname, os: m.os, runtimes: m.runtimes, status: m.status, daemonVersion: m.daemonVersion, isComputer: m.isComputer, apiKeyPrefix: m.apiKeyPrefix, lastHeartbeat: m.lastHeartbeat })), latestDaemonVersion: LATEST_DAEMON_VERSION, daemonCommandTemplate: daemonCommandTemplate() }), true);
+    return (sendJson(res, 200, { machines: machines.map((m) => ({ id: m.id, name: m.name, hostname: m.hostname, os: m.os, runtimes: m.runtimes, status: m.status, daemonVersion: m.daemonVersion, isComputer: m.isComputer, apiKeyPrefix: m.apiKeyPrefix, lastHeartbeat: m.lastHeartbeat })), latestDaemonVersion: LATEST_DAEMON_VERSION, daemonCommandTemplate: daemonCommandTemplate(), daemonBundleAvailable: await daemonBundleExists() }), true);
   }
   // Metadata-only directory picker for one daemon machine. The daemon owns the allowlist and filesystem
   // checks; the server enforces human authorization, tenant ownership, capability/version, and RPC binding.
