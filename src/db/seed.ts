@@ -25,6 +25,7 @@ async function main() {
 
   const [you] = await db.insert(users).values({
     name: "you", displayName: "You", email: "you@open-tag.local",
+    systemRole: "system_admin", // seeded deploy: the workspace owner is the deployment admin (spec §8 path a)
   }).returning();
 
   const [server] = await db.insert(servers).values({
