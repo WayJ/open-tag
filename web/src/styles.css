@@ -1119,7 +1119,7 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
 .adm-stat { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--adm-r); padding: 12px 14px; }
 .adm-stat .l { font-size: 11.5px; color: var(--muted); }
 .adm-stat .v { font-size: 22px; font-weight: 650; color: var(--ink); }
-.adm-stat .n { font-size: 11px; color: var(--success); }
+.adm-stat .n { font-size: 11px; color: var(--muted); } /* notes are qualifiers ("N disabled"), not health signals — keep neutral */
 .adm-card { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--adm-r); box-shadow: 0 1px 2px var(--shadow-1); }
 
 /* 表格 */
@@ -1173,6 +1173,10 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
 .adm-setrow .d { font-size: 12.5px; color: var(--muted); margin-top: 3px; max-width: 520px; }
 .adm-setrow label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--body); white-space: nowrap; flex: none; }
 
+/* 工具类 / 复用收编 */
+.adm .loadmore { width: auto; min-width: 200px; margin: 12px auto 0; } /* 覆盖 .loadmore 的 28px 侧槽布局（mentions 面板语境），audit 页表格下方居中 */
+.adm-mono { font-family: var(--mono); }
+
 /* 响应式 */
 @media (max-width: 768px) {
   .adm { flex-direction: column; height: auto; min-height: 100vh; }
@@ -1180,5 +1184,7 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
   .adm-side .logo, .adm-sec, .adm-side .foot { display: none; }
   .adm-side a { margin: 0 2px 0 0; white-space: nowrap; }
   .adm-main { padding: 14px; }
+  .adm-head { flex-wrap: wrap; }
+  .adm-input { min-width: 0; }
   .adm-modal { min-width: 0; } /* .modal's max-width:92vw can undercut the 380px min-width → overflow */
 }

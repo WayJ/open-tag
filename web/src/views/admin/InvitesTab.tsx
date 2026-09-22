@@ -80,12 +80,12 @@ export function InvitesTab({ api }: { api: AdminApi }) {
       {formOpen && (
         <div className="adm-card" style={{ marginBottom: 16 }}>
           <div className="adm-form">
-            <input className="adm-input" type="email" placeholder={t("admin.invites.email")} value={email} onChange={(e) => setEmail(e.target.value)} />
-            <select className="adm-input" value={serverId} onChange={(e) => setServerId(e.target.value)}>
+            <input className="adm-input" type="email" aria-label={t("admin.invites.email")} placeholder={t("admin.invites.email")} value={email} onChange={(e) => setEmail(e.target.value)} />
+            <select className="adm-input" aria-label={t("admin.invites.workspace")} value={serverId} onChange={(e) => setServerId(e.target.value)}>
               {!servers.length && <option value="">{t("admin.invites.pickWorkspace")}</option>}
               {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            <select className="adm-input" value={role} onChange={(e) => setRole(e.target.value)}>
+            <select className="adm-input" aria-label={t("admin.invites.role")} value={role} onChange={(e) => setRole(e.target.value)}>
               <option value="member">{t("admin.invites.roleMember")}</option>
               <option value="admin">{t("admin.invites.roleAdmin")}</option>
             </select>

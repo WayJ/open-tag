@@ -54,20 +54,16 @@ export function AuditTab({ api }: { api: AdminApi }) {
         {logs.map((l) => (
           <tr key={l.id}>
             <td style={{ whiteSpace: "nowrap" }}>{new Date(l.createdAt).toLocaleString()}</td>
-            <td><AdmPill tone="neutral"><span style={{ fontFamily: "var(--mono)" }}>{l.event}</span></AdmPill></td>
+            <td><AdmPill tone="neutral"><span className="adm-mono">{l.event}</span></AdmPill></td>
             <td title={l.actorUserId ?? ""}>{shortId(l.actorUserId)}</td>
             <td title={[l.targetUserId, l.targetServerId].filter(Boolean).join(" / ")}>
               {l.targetUserId || l.targetServerId ? <>{shortId(l.targetUserId)}{l.targetUserId && l.targetServerId ? " / " : ""}{shortId(l.targetServerId)}</> : "—"}
             </td>
-            <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--mono)", fontSize: 12 }} title={metaText(l.metadata)}>{metaText(l.metadata) || "—"}</td>
+            <td className="adm-mono" style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }} title={metaText(l.metadata)}>{metaText(l.metadata) || "—"}</td>
           </tr>
         ))}
       </AdminTable>
-      {logs.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-          <button className="loadmore" style={{ width: "auto", minWidth: 200, margin: 0 }} disabled={loading} onClick={loadMore}>{t("admin.audit.loadMore")}</button>
-        </div>
-      )}
+      {logs.length > 0 && <button className="loadmore" disabled={loading} onClick={loadMore}>{t("admin.audit.loadMore")}</button>}
     </div>
   );
 }
