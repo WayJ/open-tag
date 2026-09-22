@@ -289,6 +289,8 @@ test("admin servers/stats/audit: list counts, delete cascades, gate-2 rejection,
   // pagination: non-paged list has user.login events
   const all: any = await (await api("/api/admin/audit-logs?limit=200", { headers: hdr })).json();
   assert.ok(all.logs.some((l: any) => l.event === "user.login"));
+  // garbage limit must fall back (50), not crash the pg bind → 500
+  assert.equal((await api("/api/admin/audit-logs?limit=abc", { headers: hdr })).status, 200);
 });
 
 test("SYSTEM_ADMIN_EMAILS promotion: idempotent, promote-only", async () => {

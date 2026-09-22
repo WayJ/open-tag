@@ -202,7 +202,9 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
   }
 
   if (ctx.p === "/api/admin/audit-logs" && ctx.method === "GET") {
-    const limit = Math.min(Math.max(Number(ctx.url.searchParams.get("limit") ?? 50), 1), 200);
+    // NaN (e.g. ?limit=abc) must not reach .limit() — pg would choke on the bind and 500; fall back to 50
+    const rawLimit = Number(ctx.url.searchParams.get("limit") ?? 50);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50;
     const ev = ctx.url.searchParams.get("event");
     const before = ctx.url.searchParams.get("before"); // createdAt ISO cursor
     const conds: any[] = [];
