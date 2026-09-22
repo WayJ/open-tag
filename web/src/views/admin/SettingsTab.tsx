@@ -15,7 +15,11 @@ export function SettingsTab({ api }: { api: AdminApi }) {
   // Controlled-checkbox restore: cancelling the confirm leaves `open` unchanged but the DOM checkbox
   // user-toggled; bumping a counter forces the re-render that snaps it back to checked={open}.
   const [, forceRender] = useState(0);
-  useEffect(() => { api("GET", "/api/admin/settings").then((r) => { if (r?.error) { setErr(r.error); setOpen(false); } else setOpen(!!r?.openRegistration); }); /* eslint-disable-next-line */ }, [api]);
+  // Mount-once load (empty deps like the other tabs): `api` from the store is a fresh closure on
+  // every render, so depending on it would re-fire the GET on every StoreProvider re-render.
+  // A failed load leaves `open` null — the toggle stays hidden and only the error renders (never
+  // a misleading "closed" state).
+  useEffect(() => { api("GET", "/api/admin/settings").then((r) => { if (r?.error) setErr(r.error); else setOpen(!!r?.openRegistration); }); /* eslint-disable-next-line */ }, []);
   const flip = async (v: boolean) => {
     setErr("");
     if (!(await confirm({ title: t("admin.settings.regConfirmTitle"), message: v ? t("admin.settings.regOpenMsg") : t("admin.settings.regCloseMsg"), confirmLabel: t("confirm.confirm"), danger: !v }))) { forceRender((n) => n + 1); return; }
@@ -27,7 +31,7 @@ export function SettingsTab({ api }: { api: AdminApi }) {
       forceRender((n) => n + 1); // a rejected PATCH also leaves `open` unchanged → restore the checkbox
     } finally { setBusy(false); }
   };
-  if (open === null) return null;
+  if (open === null) return err ? <div className="form-err">{err}</div> : null; // load failed → error only, no toggle
   return (
     <div className="setform">
       {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}

@@ -20,7 +20,9 @@ export function InvitesTab({ api }: { api: AdminApi }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [created, setCreated] = useState<string | null>(null); // full invite URL of the just-created link
-  const [copied, setCopied] = useState(false);
+  // Which copy button is in its "copied" flash: an invite id, or "created" for the just-created
+  // modal. A single boolean would light up every row's copy button at once.
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [invites, setInvites] = useState<any[]>([]);
   const load = async () => {
     setErr("");
@@ -31,6 +33,7 @@ export function InvitesTab({ api }: { api: AdminApi }) {
   useEffect(() => {
     (async () => {
       const s = await api("GET", "/api/admin/servers");
+      if (s?.error) { setErr(s.error); await load(); return; } // dropdown can't be populated — surface why instead of silently disabling create
       const list = s?.servers ?? [];
       setServers(list);
       if (list[0]) setServerId((cur) => cur || list[0].id); // pre-select the first workspace, keep user's pick on reload
@@ -41,7 +44,7 @@ export function InvitesTab({ api }: { api: AdminApi }) {
   const create = async () => {
     if (busy) return;
     if (!email.trim() || !serverId) return;
-    setBusy(true); setErr(""); setCopied(false);
+    setBusy(true); setErr(""); setCopiedId(null);
     try {
       const r = await api("POST", "/api/admin/invites", { email: email.trim(), serverId, role, expiresInDays: days ? Number(days) : undefined });
       if (r?.error) { setErr(r.error); return; } // e.g. 409 a pending invite for this email already exists
@@ -50,8 +53,8 @@ export function InvitesTab({ api }: { api: AdminApi }) {
       await load();
     } finally { setBusy(false); }
   };
-  const copy = async (link: string) => {
-    if (await copyText(link)) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  const copy = async (link: string, id: string) => {
+    if (await copyText(link)) { setCopiedId(id); setTimeout(() => setCopiedId(null), 1500); }
     else window.prompt(t("members.copyLink"), link);
   };
   const revoke = async (inv: any) => {
@@ -77,7 +80,7 @@ export function InvitesTab({ api }: { api: AdminApi }) {
         <button className="ok" disabled={busy || !email.trim() || !serverId} onClick={create}>{busy ? t("admin.invites.creating") : t("admin.invites.create")}</button>
       </div>
       {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
-      {created && <CreatedInviteModal link={created} copied={copied} onCopy={() => copy(created)} onClose={() => setCreated(null)} />}
+      {created && <CreatedInviteModal link={created} copied={copiedId === "created"} onCopy={() => copy(created, "created")} onClose={() => setCreated(null)} />}
       <div className="inv-list">
         {invites.length === 0 ? <div className="empty">{t("admin.invites.listEmpty")}</div> : invites.map((inv) => (
           <div className="inv-item" key={inv.id}>
@@ -88,7 +91,7 @@ export function InvitesTab({ api }: { api: AdminApi }) {
             </div>
             <div className="inv-acts">
               {inv.status === "pending" && <>
-                <button className="joinbtn" onClick={() => copy(linkOf(inv.token))}>{copied ? t("admin.invites.copied") : t("admin.invites.copy")}</button>
+                <button className="joinbtn" onClick={() => copy(linkOf(inv.token), inv.id)}>{copiedId === inv.id ? t("admin.invites.copied") : t("admin.invites.copy")}</button>
                 <button className="joinbtn" style={{ color: "var(--error)" }} onClick={() => revoke(inv)}>{t("admin.invites.revoke")}</button>
               </>}
             </div>

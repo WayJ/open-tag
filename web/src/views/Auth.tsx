@@ -148,10 +148,12 @@ export function SystemInvitePage() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
+    let cancelled = false; // token changed/unmounted mid-flight → drop the late response (same guard as the AuthPage config probe)
     (async () => {
-      try { setInfo(await (await fetch(`/api/auth/system-invite-info?token=${encodeURIComponent(token || "")}`)).json()); }
-      catch { setInfo({ valid: false }); }
+      try { const d = await (await fetch(`/api/auth/system-invite-info?token=${encodeURIComponent(token || "")}`)).json(); if (!cancelled) setInfo(d); }
+      catch { if (!cancelled) setInfo({ valid: false }); }
     })();
+    return () => { cancelled = true; };
   }, [token]);
   const submit = async (e?: FormEvent<HTMLFormElement>) => {
     e?.preventDefault();

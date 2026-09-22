@@ -547,8 +547,7 @@
       "auth_account_disabled": "This account has been disabled. Contact a system admin.",
       "invite_used": "This invite has already been used.",
       "invite_expired": "This invite has expired.",
-      "invite_not_found": "This invite link is invalid.",
-      "invite_revoked": "This invite has been revoked."
+      "invite_not_found": "This invite link is invalid."
     },
     "opFailed": "Operation failed",
     "joinFailed": "Failed to join",
@@ -600,7 +599,11 @@
       "enable": "Enable",
       "disable": "Disable",
       "promote": "Make admin",
+      "promoteConfirm": "Make {{email}} a system admin?",
+      "promoteMessage": "System admins manage every user, invite, workspace, and deployment setting.",
       "demote": "Revoke admin",
+      "demoteConfirm": "Revoke system admin from {{email}}?",
+      "demoteMessage": "This user loses access to the system-admin console.",
       "resetBtn": "Reset password",
       "resetConfirm": "Reset the password for {{email}}?",
       "resetMessage": "The current password stops working immediately.",

@@ -120,3 +120,25 @@ Task 14（下一批），本批门槛 = typecheck + 单测 + web build 全绿。
 - api() 在「已登录但无 workspace」时会等 serverId 1.8s 才发请求（60×30ms
   循环）——sysadmin 无 workspace 的极端情况下 admin 页签首刷慢一点；admin
   端点本身不校验 x-server-id（gate 1.5 在 gate 2 之前），功能不受影响。
+
+## 评审修复（同日：`fix(web): batch-E review follow-ups`）
+
+1. [Important] **InvitesTab `copied` 单布尔污染所有行**：改 `copiedId:
+   string | null`（invite id，或弹窗哨兵 `"created"`），只有被点的那一行/
+   弹窗按钮进入「已复制」闪烁态。
+2. [Important] **UsersTab promote/demote 无确认**：提/撤系统管理员补
+   `useConfirm`（新 locale 键 promoteConfirm/Message、demoteConfirm/Message，
+   zh+en）；disable/enable 保持无确认（可逆，低影响）。
+3. [Important] **SettingsTab GET 失败渲染成「已关闭」**：失败时 `open` 保持
+   null、只渲染 `form-err`（不再渲染开关）。顺带修真 bug：effect 依赖
+   `[api]` 会因 store 的 api 是每次渲染的新闭包而随 StoreProvider 每次重渲染
+   重发 GET——改 mount-once 空依赖（对齐其他页签）。
+4. [Minor] 删死键 `auth.errors.invite_revoked`（zh+en）：服务端
+   `InviteStatus` 只有 valid/not_found/expired/used，撤销=硬删行→410 code
+   是 `invite_not_found`，`invite_revoked` 永不出现（已对照
+   systemAdminPolicy.ts 确认）。SystemInvitePage 的 info 探测补 cancelled
+   守卫（对齐 AuthPage config 探测）。InvitesTab workspace 下拉加载失败改
+   为显示错误（不再静默禁用创建按钮）。
+- 证据：locale JSON 合法 + zh/en 键双向零漂移 + invite_revoked 两语言均不存在；
+  `npm run typecheck`（root+web）exit 0；`web/src/views/*.test.ts` 6/6 pass；
+  `npm --prefix web run build` ✓。

@@ -31,6 +31,13 @@ export function UsersTab({ api }: { api: AdminApi }) {
       await load();
     } finally { setBusy(false); }
   };
+  // Promote/demote grant deployment-level admin — an accidental click must not go straight through
+  // (reversible, but high blast radius). Disable/enable stays unconfirmed: trivially reversible.
+  const patchRole = async (u: any) => {
+    const promote = !u.systemRole;
+    if (!(await confirm({ title: t(promote ? "admin.users.promoteConfirm" : "admin.users.demoteConfirm", { email: u.email }), message: t(promote ? "admin.users.promoteMessage" : "admin.users.demoteMessage"), confirmLabel: t(promote ? "admin.users.promote" : "admin.users.demote") }))) return;
+    await patch(u.id, { systemRole: promote ? "system_admin" : null });
+  };
   const resetPw = async (u: any) => {
     if (!(await confirm({ title: t("admin.users.resetConfirm", { email: u.email }), message: t("admin.users.resetMessage"), confirmLabel: t("admin.users.resetBtn"), danger: true }))) return;
     setBusy(true); setErr("");
@@ -65,7 +72,7 @@ export function UsersTab({ api }: { api: AdminApi }) {
             <td style={{ padding: "6px 8px" }}>{new Date(u.createdAt).toLocaleDateString()}</td>
             <td style={{ whiteSpace: "nowrap", padding: "6px 8px", textAlign: "right" }}>
               <button className="action-btn" disabled={busy} onClick={() => patch(u.id, { disabled: !u.disabledAt })}>{u.disabledAt ? t("admin.users.enable") : t("admin.users.disable")}</button>{" "}
-              <button className="action-btn" disabled={busy} onClick={() => patch(u.id, { systemRole: u.systemRole ? null : "system_admin" })}>{u.systemRole ? t("admin.users.demote") : t("admin.users.promote")}</button>{" "}
+              <button className="action-btn" disabled={busy} onClick={() => patchRole(u)}>{u.systemRole ? t("admin.users.demote") : t("admin.users.promote")}</button>{" "}
               <button className="action-btn" disabled={busy} onClick={() => resetPw(u)}>{t("admin.users.resetBtn")}</button>
             </td>
           </tr>))}</tbody>

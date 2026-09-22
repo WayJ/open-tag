@@ -547,8 +547,7 @@
       "auth_account_disabled": "该账号已被禁用。请联系系统管理员。",
       "invite_used": "该邀请已被使用。",
       "invite_expired": "该邀请已过期。",
-      "invite_not_found": "邀请链接无效。",
-      "invite_revoked": "该邀请已被撤销。"
+      "invite_not_found": "邀请链接无效。"
     },
     "opFailed": "操作失败",
     "joinFailed": "加入失败",
@@ -600,7 +599,11 @@
       "enable": "启用",
       "disable": "禁用",
       "promote": "设为管理员",
+      "promoteConfirm": "将 {{email}} 设为系统管理员？",
+      "promoteMessage": "系统管理员可管理全部用户、邀请、Workspace 与部署设置。",
       "demote": "撤销管理员",
+      "demoteConfirm": "撤销 {{email}} 的系统管理员？",
+      "demoteMessage": "该用户将失去系统管理控制台的访问权。",
       "resetBtn": "重置密码",
       "resetConfirm": "重置 {{email}} 的密码？",
       "resetMessage": "当前密码立即失效。",
