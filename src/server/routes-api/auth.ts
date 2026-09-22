@@ -6,7 +6,7 @@ import { devLoginEnabled, hashPassword, isValidEmail, passwordError, safeEqual, 
 import { DESC_TOO_LONG, createServer, descTooLong } from "../core.js";
 import { REGISTER_RATE_LIMIT, REGISTER_RATE_WINDOW_MS, clientIp, rateLimit } from "../ratelimit.js";
 import { readJson, sendErr, sendJson } from "../util.js";
-import { registrationDecision } from "../systemAdminPolicy.js";
+import { inviteStatus, maskEmail, registrationDecision } from "../systemAdminPolicy.js";
 import { openRegistrationEnabled } from "../systemSettings.js";
 import { logAudit } from "../audit.js";
 
@@ -64,6 +64,46 @@ export async function handlePublicAuth(ctx: BaseCtx): Promise<boolean> {
   // The server-side 403 on POST /api/auth/register remains the enforcement; this is UX only.
   if (p === "/api/auth/config" && method === "GET") {
     return (sendJson(res, 200, { openRegistration: await openRegistrationEnabled() }), true);
+  }
+  // System-invite info (public, no auth): the /invite/:token landing page uses this to render
+  // "X invited you to join workspace Y" before the user has an account. Email is masked — an
+  // unauthenticated visitor holding a leaked token must not recover the full address.
+  if (p === "/api/auth/system-invite-info" && method === "GET") {
+    const tok = url.searchParams.get("token") ?? "";
+    const link = tok ? (await db.select().from(schema.systemInvites).where(eq(schema.systemInvites.token, tok)))[0] : undefined;
+    const status = inviteStatus(link);
+    if (status !== "valid") return (sendJson(res, 200, { valid: false, reason: status }), true);
+    const srv = (await db.select().from(schema.servers).where(eq(schema.servers.id, link!.serverId)))[0];
+    if (!srv) return (sendJson(res, 200, { valid: false, reason: "server_gone" }), true);
+    const inviter = link!.createdByUserId ? (await db.select().from(schema.users).where(eq(schema.users.id, link!.createdByUserId)))[0] : null;
+    return (sendJson(res, 200, { valid: true, email: maskEmail(link!.email), serverName: srv.name, serverSlug: srv.slug, inviterName: inviter?.displayName || inviter?.name || null, role: link!.role }), true);
+  }
+  // Accept a system invite (public): creates the account (the register-closed path), joins the
+  // target workspace with the granted role, auto-joins #all, and signs the new user in.
+  if (p === "/api/auth/accept-system-invite" && method === "POST") {
+    const rl = rateLimit("auth:sysinvite", clientIp(req), 10);
+    if (!rl.ok) return (sendErr(res, 429, "too many requests", { retryAfter: rl.retryAfter }), true);
+    const b = await readJson(req);
+    const link = b.token ? (await db.select().from(schema.systemInvites).where(eq(schema.systemInvites.token, String(b.token))))[0] : undefined;
+    const status = inviteStatus(link);
+    // Any non-usable token — never existed, revoked (hard-deleted), expired, or already used — is a
+    // 410 "invite link gone" to the landing page; the reason rides in `code`. (404 would invite the
+    // client to treat a dead invite link as a wrong URL rather than a spent one.)
+    if (status !== "valid") return (sendErr(res, 410, status === "expired" ? "invite expired" : status === "used" ? "invite already used" : "invalid invite", { code: `invite_${status}` }), true);
+    const name = typeof b.name === "string" ? b.name.trim() : "";
+    if (!name || name.length > 64) return (sendErr(res, 400, "invalid name", { code: "auth_register_name_invalid" }), true);
+    const pwErr = passwordError(b.password);
+    if (pwErr) return (sendErr(res, 400, pwErr, { code: "auth_password_invalid" }), true);
+    const email = link!.email;
+    const dup = (await db.select().from(schema.users).where(or(eq(schema.users.email, email), eq(schema.users.name, name))))[0];
+    if (dup) return (sendErr(res, 409, dup.email === email ? "email already registered" : "username already taken", { code: dup.email === email ? "auth_register_email_taken" : "auth_register_username_taken" }), true);
+    const [u] = await db.insert(schema.users).values({ name, displayName: name, email, passwordHash: hashPassword(String(b.password)) }).returning();
+    await db.insert(schema.serverMembers).values({ serverId: link!.serverId, userId: u!.id, role: link!.role });
+    await db.update(schema.systemInvites).set({ acceptedAt: new Date() }).where(eq(schema.systemInvites.id, link!.id));
+    const all = (await db.select().from(schema.channels).where(and(eq(schema.channels.serverId, link!.serverId), eq(schema.channels.name, "all"))))[0];
+    if (all) await db.insert(schema.channelMembers).values({ channelId: all.id, memberType: "user", memberId: u!.id }).onConflictDoNothing();
+    await logAudit("invite.accepted", { targetUserId: u!.id, targetServerId: link!.serverId, metadata: { ip: clientIp(req) } });
+    return (sendJson(res, 200, { token: signUser(u!.id), user: { id: u!.id, name: u!.name } }), true);
   }
   if (p === "/api/auth/register" && method === "POST") {
     const rl = rateLimit("auth:register", clientIp(req), REGISTER_RATE_LIMIT, REGISTER_RATE_WINDOW_MS);

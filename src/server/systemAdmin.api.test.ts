@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema, sql } from "../db/index.js";
 import { hashPassword, signUser } from "./auth.js";
 
@@ -137,4 +137,54 @@ test("admin users: list, disable/enable, grant/revoke sysadmin, self-guard, rese
   assert.ok(typeof temp === "string" && temp.length >= 10);
   assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: "password-1" }) })).status, 401);
   assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: temp }) })).status, 200);
+});
+
+test("system invites: create → info → accept creates account & joins workspace; dup pending 409; revoked/expired 410; non-admin 403", async () => {
+  const admin = await insertUser({ email: `sa4-${suffix}@t.local`, name: `sa4${suffix}`, password: "password-1", systemRole: "system_admin" });
+  const hdr = { authorization: `Bearer ${signUser(admin.id)}`, "content-type": "application/json" };
+  const srv = (await db.select().from(schema.servers).where(eq(schema.servers.slug, "open-tag")))[0]!;
+
+  const inv: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in4-${suffix}@t.local`, serverId: srv.id, role: "member" }) })).json();
+  assert.ok(inv.invite?.token && inv.url?.includes("/invite/"));
+
+  assert.equal((await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in4-${suffix}@t.local`, serverId: srv.id }) })).status, 409);
+
+  const info: any = await (await api(`/api/auth/system-invite-info?token=${inv.invite.token}`)).json();
+  assert.equal(info.valid, true);
+  assert.ok(!info.email.includes(`in4-${suffix}`)); // masked
+  assert.equal(info.serverSlug, "open-tag");
+
+  const acc = await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv.invite.token, name: `in4${suffix}`, password: "password-1" }) });
+  assert.equal(acc.status, 200);
+  const { token: newTok }: any = await acc.json();
+  const me: any = await (await api("/api/auth/me", { headers: { authorization: `Bearer ${newTok}` } })).json();
+  assert.equal(me.email, `in4-${suffix}@t.local`);
+  const newMem = (await db.select().from(schema.serverMembers).where(eq(schema.serverMembers.userId, me.id)))[0];
+  assert.ok(newMem && newMem.serverId === srv.id && newMem.role === "member");
+  // joined #all
+  const allCh = (await db.select().from(schema.channels).where(and(eq(schema.channels.serverId, srv.id), eq(schema.channels.name, "all"))))[0]!;
+  const cm = (await db.select().from(schema.channelMembers).where(and(eq(schema.channelMembers.channelId, allCh.id), eq(schema.channelMembers.memberId, me.id))))[0];
+  assert.ok(cm);
+
+  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv.invite.token, name: "x", password: "password-1" }) })).status, 410);
+
+  const inv2: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in5-${suffix}@t.local`, serverId: srv.id, expiresInDays: 0.00001 }) })).json();
+  await new Promise((r) => setTimeout(r, 1100)); // expiresInDays 0.00001 = ~0.86s — let it actually lapse
+  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv2.invite.token, name: "y", password: "password-1" }) })).status, 410);
+  // re-invite after expiry replaces the stale row (pending-email unique index must not 500)
+  const inv2b: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in5-${suffix}@t.local`, serverId: srv.id }) })).json();
+  assert.ok(inv2b.invite?.token && inv2b.invite.token !== inv2.invite.token);
+
+  const inv3: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: `in6-${suffix}@t.local`, serverId: srv.id }) })).json();
+  assert.equal((await api(`/api/admin/invites/${inv3.invite.id}`, { method: "DELETE", headers: hdr })).status, 200);
+  assert.equal((await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: inv3.invite.token, name: "z", password: "password-1" }) })).status, 410);
+  assert.equal((await api(`/api/admin/invites/${inv3.invite.id}`, { method: "DELETE", headers: hdr })).status, 404);
+
+  // admin list shows statuses
+  const list: any = await (await api("/api/admin/invites", { headers: hdr })).json();
+  assert.ok(list.invites.some((i: any) => i.id === inv.invite.id && i.status === "accepted"));
+  assert.ok(!list.invites.some((i: any) => i.id === inv3.invite.id)); // revoked = hard-deleted
+
+  const pleb = await insertUser({ email: `pl4-${suffix}@t.local`, name: `pl4${suffix}`, password: "password-1" });
+  assert.equal((await api("/api/admin/invites", { method: "POST", headers: { authorization: `Bearer ${signUser(pleb.id)}`, "content-type": "application/json" }, body: JSON.stringify({ email: "x@y.zz", serverId: srv.id }) })).status, 403);
 });

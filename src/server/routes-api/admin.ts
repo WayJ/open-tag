@@ -4,7 +4,7 @@ import type { UserCtx } from "./ctx.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
-import { hashPassword } from "../auth.js";
+import { hashPassword, isValidEmail, newKey } from "../auth.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
 import { openRegistrationEnabled, setOpenRegistration } from "../systemSettings.js";
 import { logAudit } from "../audit.js";
@@ -70,6 +70,45 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
       await db.update(schema.users).set({ passwordHash: hashPassword(temp) }).where(eq(schema.users.id, target.id));
       await logAudit("user.password_reset", { actorUserId: ctx.userId, targetUserId: target.id });
       return (sendJson(ctx.res, 200, { tempPassword: temp }), true);
+    }
+  }
+
+  if (ctx.p === "/api/admin/invites" && ctx.method === "GET") {
+    const rows = await db.select().from(schema.systemInvites);
+    const srvs = await db.select({ id: schema.servers.id, name: schema.servers.name }).from(schema.servers);
+    const nameById = new Map(srvs.map((s) => [s.id, s.name]));
+    return (sendJson(ctx.res, 200, { invites: rows.map((r) => ({ ...r, serverName: nameById.get(r.serverId) ?? null, status: r.acceptedAt ? "accepted" : (r.expiresAt && new Date(r.expiresAt as any).getTime() < Date.now() ? "expired" : "pending") })) }), true);
+  }
+  if (ctx.p === "/api/admin/invites" && ctx.method === "POST") {
+    const b = await readJson(ctx.req);
+    if (!isValidEmail(b.email)) return (sendErr(ctx.res, 400, "invalid email"), true);
+    if (!isUuid(String(b.serverId ?? ""))) return (sendErr(ctx.res, 400, "invalid serverId"), true);
+    const srv = (await db.select().from(schema.servers).where(eq(schema.servers.id, String(b.serverId))))[0];
+    if (!srv) return (sendErr(ctx.res, 404, "server not found"), true);
+    if (b.role !== undefined && !["member", "admin"].includes(String(b.role))) return (sendErr(ctx.res, 400, "role must be member or admin"), true);
+    const days = b.expiresInDays != null ? Number(b.expiresInDays) : 7;
+    if (!Number.isFinite(days) || days <= 0 || days > 90) return (sendErr(ctx.res, 400, "expiresInDays must be in (0, 90]"), true);
+    const dup = (await db.select().from(schema.systemInvites).where(eq(schema.systemInvites.email, String(b.email).toLowerCase())))[0];
+    if (dup && !dup.acceptedAt && !(dup.expiresAt && new Date(dup.expiresAt as any).getTime() < Date.now())) return (sendErr(ctx.res, 409, "a pending invite for this email already exists"), true);
+    if (dup && !dup.acceptedAt) await db.delete(schema.systemInvites).where(eq(schema.systemInvites.id, dup.id)); // stale expired row: clear it or the pending-email partial unique index would reject the re-invite with a 500
+    const [inv] = await db.insert(schema.systemInvites).values({
+      email: String(b.email).toLowerCase(), token: newKey("inv_"), serverId: srv.id,
+      role: b.role != null ? String(b.role) : "member", createdByUserId: ctx.userId,
+      expiresAt: new Date(Date.now() + days * 86_400_000),
+    }).returning();
+    await logAudit("invite.created", { actorUserId: ctx.userId, targetServerId: srv.id, metadata: { email: inv!.email } });
+    return (sendJson(ctx.res, 200, { invite: inv, url: `/invite/${inv!.token}` }), true);
+  }
+  {
+    const m = /^\/api\/admin\/invites\/([^/]+)$/.exec(ctx.p);
+    if (m && ctx.method === "DELETE") {
+      if (!isUuid(m[1]!)) return (sendErr(ctx.res, 404, "not found"), true);
+      const inv = (await db.select().from(schema.systemInvites).where(eq(schema.systemInvites.id, m[1]!)))[0];
+      if (!inv) return (sendErr(ctx.res, 404, "invite not found"), true);
+      if (inv.acceptedAt) return (sendErr(ctx.res, 409, "invite already accepted"), true);
+      await db.delete(schema.systemInvites).where(eq(schema.systemInvites.id, inv.id));
+      await logAudit("invite.revoked", { actorUserId: ctx.userId, metadata: { email: inv.email } });
+      return (sendJson(ctx.res, 200, { ok: true }), true);
     }
   }
 
