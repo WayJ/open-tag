@@ -17,7 +17,7 @@ accepted by another — using the wrong plane's auth on a route is a security de
 
 | Plane | Who | Credential | Verified by | Endpoints |
 |---|---|---|---|---|
-| **human** | a person in a browser | JWT (`signUser`/`verifyUser`, 30-day) + `x-server-id` header | `auth.ts` `verifyUser` + the member gate in `routes-api.ts` | `/api/*` |
+| **human** | a person in a browser | JWT (`signUser`/`verifyUser`, 30-day) + `x-server-id` header | `auth.ts` `resolveActiveUser` (JWT verify → live user row → `disabledAt` rejected) + the member gate in `routes-api.ts` | `/api/*` |
 | **agent** | an AI agent process | per-agent token `sk_agent_*` + `x-agent-id` header | `auth.ts` `resolveAgent` (SHA-256 of token vs `agents.agentTokenHash`, bound to the agent id) | `/agent-api/*` |
 | **daemon** | a machine running agents | machine key (`sk_machine_*` or bootstrap key) in the WS query string | `ws.ts` handshake (`apiKeyHash` lookup; unknown key → close `4001`) | WS `/daemon/connect?key=` |
 
@@ -27,7 +27,8 @@ never in public channels (see `core-beliefs.md` §4).
 
 **Public (unauthenticated) endpoint inventory.** Outside the three planes, the server deliberately
 exposes a small no-auth surface, dispatched in `index.ts` before any gate: `GET /health` (liveness), the
-self-authenticating `/api/auth/*` endpoints (register/login/dev-login/invite-info/accept-invite/setup —
+self-authenticating `/api/auth/*` endpoints (register/login/dev-login/invite-info/accept-invite/setup,
+plus the UX-only `GET /api/auth/config` registration-state probe —
 gate 0 in `routes-api/index.ts`), and the daemon-distribution surface served by `src/server/daemonBundle.ts`:
 `GET/HEAD /daemon/cli.mjs` + `GET /daemon/agent-cli.mjs` (`no-cache`) serve the self-contained daemon
 bundles — public at the same trust level as the public npm package because **the bundles embed no
@@ -60,13 +61,25 @@ no inheritance, no wildcards.
   `if (!await requireCap(serverId, userId, "manageX")) return (sendErr(res, 403, "need manageX capability"), true);`
 
 **Enforcement order on a server-scoped route:**
-1. `verifyUser(bearer)` → `userId` (else 401).
+1. `resolveActiveUser(bearer)` → live, non-disabled `userId` (else 401) — flipping `users.disabledAt`
+   revokes already-issued 30-day JWTs at every REST / socket.io-handshake / public-attachment gate.
 2. `serverId = serverIdHeader(req)` (the `x-server-id` header — client-supplied, trusted *only* after step 3).
 3. **Member gate** (`routes-api.ts`): `serverMembers WHERE serverId AND userId` — else `403 not a member`.
 4. **Capability gate** (for privileged mutations): `requireCap(serverId, userId, cap)`.
 5. **Resource gate** (for `:id` resources): the query's `WHERE` must also pin `serverId` / membership / ownership (§4).
 
 Steps 1–3 are universal. **Steps 4–5 are per-endpoint and are exactly where gaps live (§6).**
+
+**System plane (`systemRole` + `/api/admin/*`, gate 1.5).** Deployment-wide, orthogonal to workspace
+roles: `users.systemRole = "system_admin"` gates every `/api/admin/*` route (dispatched in
+`routes-api/index.ts` after gate 1, before the server-scope gate, no `x-server-id` needed; non-admins →
+`403 system admin required`). First admins come from the seed (owner marked `system_admin`), the
+empty-users-table register bootstrap, or `SYSTEM_ADMIN_EMAILS` at boot. `users.disabledAt` (soft-disable)
+is enforced centrally in `resolveActiveUser`; login additionally returns `403 auth_account_disabled`.
+Registration is gated by the `openRegistration` system setting: `POST /api/auth/register` →
+`403 auth_registration_closed` when closed (`GET /api/auth/config` is the public UX probe, not
+enforcement); admin changes go through `GET/PATCH /api/admin/settings` and are audit-logged
+(`audit.ts` → `auditLogs`).
 
 ## 3. Agent plane: scope model (`scopes.ts`) + the resource gap
 
