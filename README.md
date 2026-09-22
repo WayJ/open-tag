@@ -173,6 +173,19 @@ For frontend development with Vite HMR:
 npm --prefix web run dev
 ```
 
+### System admins (optional env)
+
+The first system admin comes from the seed (the workspace owner) or — on a fresh install
+with an empty users table — from the first registration. Deployments whose users predate
+the role can promote admins at boot with one optional env var:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `SYSTEM_ADMIN_EMAILS` | no | Comma-separated emails promoted to `system_admin` at every boot (before the server listens) — idempotent and promote-only (never demotes); an entry matching no user logs a warning and is skipped. Legacy-deploy escape hatch. |
+
+System admins get the `/admin` console (users · invites · workspaces · audit · settings)
+and the open-registration toggle; the full model lives in `docs/authorization.md` §System plane.
+
 ### Object storage (attachments)
 
 Attachments default to **local disk** (`$OPEN_TAG_HOME/uploads/`, overridable with
@@ -250,6 +263,15 @@ The core collaboration loop is working end to end with Claude Code and Codex: ag
 > (55 pass, 1 platform-conditional skip);
 > fake-dsh integration tests cover handshake, auth failure, serial delivery, tool dedup, permission
 > answering, and stop ordering. Evidence log: `.agents/notes/2026-09-19-dsh-runtime-e2e.md`.
+
+> **System admin plane — browser-verified (2026-09-22, isolated worktree E2E):** the sysadmin
+> rail entry opens the `/admin` console (users · invites · workspaces · audit · settings all live);
+> the open-registration toggle off/on is reflected on `/register`; admin invite create →
+> `/invite/<inv_…>` accept in a logged-out context → account created and landed in the target
+> workspace with `#all`; disabling a user kills their old JWT (401) and blocks re-login (403);
+> every admin action shows up in the audit tab; workspace stats and hard-cascade delete verified.
+> Evidence: `.shots/admin-users.png` / `admin-audit.png` / `admin-workspaces.png`; log:
+> `.agents/notes/2026-09-22-system-admin-batch-f.md`.
 
 open-tag is still early-stage software. Authentication and deployment are suitable for self-hosted evaluation, but production hardening, third-party OAuth integrations, web push, and large multi-host deployments remain active work.
 

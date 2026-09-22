@@ -43,6 +43,14 @@
 The early capability slices shipped and their working notes were not retained as plan files;
 their verified end state is recorded in `FEATURES.md`:
 
+- **System admin plane** ✅ (2026-09-22, worktree `open-tag-system-admin`) — deployment-wide
+  `system_admin` role (seed / first-registrant / `SYSTEM_ADMIN_EMAILS` bootstrap), open-registration
+  toggle, admin invite-link account creation (`/invite/<inv_…>`), the `/admin` console (users /
+  invites / workspaces / audit / settings), and disabled-user enforcement across the REST / WS /
+  attachment gates. Server + web only (zero daemon changes — no release item). Browser-verified
+  end-to-end (FEATURES P8; evidence `.agents/notes/2026-09-22-system-admin-batch-f.md`). Spec:
+  [`docs/superpowers/specs/2026-09-22-system-admin-plane-design.md`](./superpowers/specs/2026-09-22-system-admin-plane-design.md) ·
+  plan: [`docs/superpowers/plans/2026-09-22-system-admin-plane.md`](./superpowers/plans/2026-09-22-system-admin-plane.md).
 - **Safe daemon project browser** - manual entry plus a machine-targeted shared-root picker and
   bounded marker discovery, with the same fail-closed policy applied again at runtime start.
   Evidence: [`docs/exec-plans/completed/project-directory-browser.md`](./exec-plans/completed/project-directory-browser.md).
