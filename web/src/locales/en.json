@@ -542,7 +542,9 @@
       "auth_register_name_invalid": "Usernames need 1-64 characters.",
       "auth_register_email_taken": "That email already has an account. Sign in instead.",
       "auth_register_username_taken": "That username is taken. Choose another @mention name.",
-      "auth_rate_limited": "Too many attempts. Wait a minute and try again."
+      "auth_rate_limited": "Too many attempts. Wait a minute and try again.",
+      "auth_registration_closed": "Registration is closed — ask a system admin for an invite.",
+      "auth_account_disabled": "This account has been disabled. Contact a system admin."
     },
     "opFailed": "Operation failed",
     "joinFailed": "Failed to join",
@@ -560,6 +562,50 @@
     "hasAccount": "Already have an account? ",
     "noAccount": "No account? ",
     "newUser": "New user? "
+  },
+  "admin": {
+    "title": "System admin",
+    "subtitle": "Deployment-level admin console",
+    "entry": "System admin",
+    "tab": {
+      "users": "Users",
+      "invites": "Invites",
+      "workspaces": "Workspaces",
+      "audit": "Audit log",
+      "settings": "Settings"
+    },
+    "users": {
+      "search": "Search email/username (Enter)",
+      "email": "Email",
+      "role": "System role",
+      "status": "Status",
+      "workspaces": "Workspaces",
+      "created": "Created",
+      "sysAdmin": "System admin",
+      "active": "Active",
+      "disabled": "Disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "promote": "Make admin",
+      "demote": "Revoke admin",
+      "resetBtn": "Reset password",
+      "resetConfirm": "Reset the password for {{email}}?",
+      "resetMessage": "The current password stops working immediately.",
+      "tempPwTitle": "Temporary password for {{email}}",
+      "tempPwNote": "Shown only once — copy it and hand it to the user.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "empty": "No matching users"
+    },
+    "settings": {
+      "openRegistration": "Open registration",
+      "open": "Open",
+      "closed": "Closed",
+      "regConfirmTitle": "Change open registration?",
+      "regOpenMsg": "Anyone will be able to sign up on their own.",
+      "regCloseMsg": "Only system-admin invites will create accounts.",
+      "regHint": "With registration closed, new users are created from the Invites tab."
+    }
   },
   "qs": {
     "ariaLabel": "Quick switcher",
