@@ -599,7 +599,8 @@
       "demote": "撤销系统管理员",
       "resetPassword": "重置密码",
       "copyLink": "复制链接",
-      "revokeInvite": "撤销邀请"
+      "revokeInvite": "撤销邀请",
+      "deleteWorkspace": "删除 Workspace"
     },
     "users": {
       "search": "搜索邮箱/用户名（回车）",

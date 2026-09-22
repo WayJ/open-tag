@@ -599,7 +599,8 @@
       "demote": "Revoke sysadmin",
       "resetPassword": "Reset password",
       "copyLink": "Copy link",
-      "revokeInvite": "Revoke invite"
+      "revokeInvite": "Revoke invite",
+      "deleteWorkspace": "Delete workspace"
     },
     "users": {
       "search": "Search email/username (Enter)",

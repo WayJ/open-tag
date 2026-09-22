@@ -33,12 +33,20 @@ export function SettingsTab({ api }: { api: AdminApi }) {
   };
   if (open === null) return err ? <div className="form-err">{err}</div> : null; // load failed → error only, no toggle
   return (
-    <div className="setform">
-      {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
-      <div className="kv"><b>{t("admin.settings.openRegistration")}</b>
-        <label><input type="checkbox" checked={open} disabled={busy} onChange={(e) => flip(e.target.checked)} /> {open ? t("admin.settings.open") : t("admin.settings.closed")}</label>
+    <div>
+      <div className="adm-head">
+        <h1>{t("admin.tab.settings")}</h1>
       </div>
-      <p className="empty">{t("admin.settings.regHint")}</p>
+      {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
+      <div className="adm-card">
+        <div className="adm-setrow">
+          <div>
+            <div className="t">{t("admin.settings.openRegistration")}</div>
+            <div className="d">{t("admin.settings.regHint")}</div>
+          </div>
+          <label><input type="checkbox" checked={open} disabled={busy} onChange={(e) => flip(e.target.checked)} /> {open ? t("admin.settings.open") : t("admin.settings.closed")}</label>
+        </div>
+      </div>
     </div>
   );
 }

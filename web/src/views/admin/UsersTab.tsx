@@ -71,7 +71,7 @@ export function UsersTab({ api }: { api: AdminApi }) {
       <div className="adm-head">
         <h1>{t("admin.tab.users")}</h1>
         <div className="acts">
-          <input className="adm-input" placeholder={t("admin.users.search")} value={q} onChange={(e) => setQ(e.target.value)}
+          <input className="adm-input" aria-label={t("admin.users.search")} placeholder={t("admin.users.search")} value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && load()} />
           <button className="adm-btn-primary" onClick={() => nav("/admin/invites")}>{t("admin.users.inviteCta")}</button>
         </div>

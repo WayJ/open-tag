@@ -3,6 +3,8 @@
 // timestamp). Actor/target are user/server ids — the audit log is raw history, not a name directory.
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AdmPill } from "./AdmPill.tsx";
+import { AdminTable } from "./AdminTable.tsx";
 import type { AdminApi } from "../Admin.tsx";
 
 // Mirrors src/server/audit.ts AuditEvent (11 events) — the select's options. Raw event identifiers
@@ -35,30 +37,37 @@ export function AuditTab({ api }: { api: AdminApi }) {
   const loadMore = () => { const last = logs[logs.length - 1]; if (last?.createdAt) fetchPage(event, new Date(last.createdAt).toISOString()); };
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <select value={event} onChange={(e) => setEvent(e.target.value)} style={{ maxWidth: 320 }}>
-          <option value="">{t("admin.audit.allEvents")}</option>
-          {EVENTS.map((ev) => <option key={ev} value={ev}>{ev}</option>)}
-        </select>
+      <div className="adm-head">
+        <h1>{t("admin.tab.audit")}</h1>
+        <div className="acts">
+          <select className="adm-input" aria-label={t("admin.audit.event")} value={event} onChange={(e) => setEvent(e.target.value)}>
+            <option value="">{t("admin.audit.allEvents")}</option>
+            {EVENTS.map((ev) => <option key={ev} value={ev}>{ev}</option>)}
+          </select>
+        </div>
       </div>
       {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr style={{ textAlign: "left", borderBottom: "1px solid var(--hair-strong)" }}>
-          <th style={{ padding: "6px 8px" }}>{t("admin.audit.time")}</th><th style={{ padding: "6px 8px" }}>{t("admin.audit.event")}</th><th style={{ padding: "6px 8px" }}>{t("admin.audit.actor")}</th><th style={{ padding: "6px 8px" }}>{t("admin.audit.target")}</th><th style={{ padding: "6px 8px" }}>{t("admin.audit.metadata")}</th>
-        </tr></thead>
-        <tbody>{logs.map((l) => (
-          <tr key={l.id} style={{ borderBottom: "1px solid var(--hair)" }}>
-            <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{new Date(l.createdAt).toLocaleString()}</td>
-            <td style={{ padding: "6px 8px" }}>{l.event}</td>
-            <td style={{ padding: "6px 8px" }} title={l.actorUserId ?? ""}>{shortId(l.actorUserId)}</td>
-            <td style={{ padding: "6px 8px" }} title={[l.targetUserId, l.targetServerId].filter(Boolean).join(" / ")}>
+      <AdminTable
+        cols={[t("admin.audit.time"), t("admin.audit.event"), t("admin.audit.actor"), t("admin.audit.target"), t("admin.audit.metadata")]}
+        empty={!loading && !err ? t("admin.audit.empty") : undefined}
+      >
+        {logs.map((l) => (
+          <tr key={l.id}>
+            <td style={{ whiteSpace: "nowrap" }}>{new Date(l.createdAt).toLocaleString()}</td>
+            <td><AdmPill tone="neutral"><span style={{ fontFamily: "var(--mono)" }}>{l.event}</span></AdmPill></td>
+            <td title={l.actorUserId ?? ""}>{shortId(l.actorUserId)}</td>
+            <td title={[l.targetUserId, l.targetServerId].filter(Boolean).join(" / ")}>
               {l.targetUserId || l.targetServerId ? <>{shortId(l.targetUserId)}{l.targetUserId && l.targetServerId ? " / " : ""}{shortId(l.targetServerId)}</> : "—"}
             </td>
-            <td style={{ padding: "6px 8px", maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={metaText(l.metadata)}>{metaText(l.metadata) || "—"}</td>
-          </tr>))}</tbody>
-      </table>
-      {!loading && logs.length === 0 && !err && <div className="empty">{t("admin.audit.empty")}</div>}
-      {logs.length > 0 && <button className="loadmore" disabled={loading} onClick={loadMore} style={{ marginTop: 10 }}>{t("admin.audit.loadMore")}</button>}
+            <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "var(--mono)", fontSize: 12 }} title={metaText(l.metadata)}>{metaText(l.metadata) || "—"}</td>
+          </tr>
+        ))}
+      </AdminTable>
+      {logs.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+          <button className="loadmore" style={{ width: "auto", minWidth: 200, margin: 0 }} disabled={loading} onClick={loadMore}>{t("admin.audit.loadMore")}</button>
+        </div>
+      )}
     </div>
   );
 }

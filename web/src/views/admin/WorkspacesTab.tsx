@@ -5,6 +5,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useConfirm } from "../../ConfirmModal.tsx";
+import { StatCard } from "./StatCard.tsx";
+import { AdminTable } from "./AdminTable.tsx";
+import { RowMenu } from "./RowMenu.tsx";
 import type { AdminApi } from "../Admin.tsx";
 
 export function WorkspacesTab({ api }: { api: AdminApi }) {
@@ -33,45 +36,38 @@ export function WorkspacesTab({ api }: { api: AdminApi }) {
   };
   return (
     <div>
+      <div className="adm-head">
+        <h1>{t("admin.tab.workspaces")}</h1>
+      </div>
+      {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
       {stats && (
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-          <div className="card" style={{ flex: "1 1 150px", marginBottom: 0 }}>
-            <h3>{stats.users.total}</h3>
-            <div className="meta">{t("admin.workspaces.statsUsers")} · {t("admin.workspaces.disabledCount", { count: stats.users.disabled })}</div>
-          </div>
-          <div className="card" style={{ flex: "1 1 150px", marginBottom: 0 }}>
-            <h3>{stats.servers}</h3>
-            <div className="meta">{t("admin.workspaces.statsServers")}</div>
-          </div>
-          <div className="card" style={{ flex: "1 1 150px", marginBottom: 0 }}>
-            <h3>{stats.agents.active}/{stats.agents.total}</h3>
-            <div className="meta">{t("admin.workspaces.statsAgents")}</div>
-          </div>
-          <div className="card" style={{ flex: "1 1 150px", marginBottom: 0 }}>
-            <h3>{stats.machines.online}/{stats.machines.total}</h3>
-            <div className="meta">{t("admin.workspaces.statsMachines")}</div>
-          </div>
+        <div className="adm-stats">
+          <StatCard label={t("admin.stats.totalUsers")} value={stats.users.total} note={t("admin.workspaces.disabledCount", { count: stats.users.disabled })} />
+          <StatCard label={t("admin.workspaces.statsServers")} value={stats.servers} />
+          <StatCard label={t("admin.workspaces.statsAgents")} value={`${stats.agents.active}/${stats.agents.total}`} />
+          <StatCard label={t("admin.workspaces.statsMachines")} value={`${stats.machines.online}/${stats.machines.total}`} />
         </div>
       )}
-      {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr style={{ textAlign: "left", borderBottom: "1px solid var(--hair-strong)" }}>
-          <th style={{ padding: "6px 8px" }}>{t("admin.workspaces.name")}</th><th style={{ padding: "6px 8px" }}>{t("admin.workspaces.slug")}</th><th style={{ padding: "6px 8px" }}>{t("admin.workspaces.owner")}</th><th style={{ padding: "6px 8px" }}>{t("admin.workspaces.members")}</th><th style={{ padding: "6px 8px" }}>{t("admin.workspaces.agents")}</th><th style={{ padding: "6px 8px" }}>{t("admin.workspaces.created")}</th><th></th>
-        </tr></thead>
-        <tbody>{servers.map((srv) => (
-          <tr key={srv.id} style={{ borderBottom: "1px solid var(--hair)" }}>
-            <td style={{ padding: "6px 8px" }}>{srv.name}</td>
-            <td style={{ padding: "6px 8px" }}>{srv.slug}</td>
-            <td style={{ padding: "6px 8px" }}>{srv.ownerName ?? "—"}</td>
-            <td style={{ padding: "6px 8px" }}>{srv.memberCount}</td>
-            <td style={{ padding: "6px 8px" }}>{srv.agentCount}</td>
-            <td style={{ padding: "6px 8px" }}>{new Date(srv.createdAt).toLocaleDateString()}</td>
-            <td style={{ whiteSpace: "nowrap", padding: "6px 8px", textAlign: "right" }}>
-              <button className="danger-btn" disabled={busy} onClick={() => remove(srv)}>{t("admin.workspaces.delete")}</button>
+      <AdminTable
+        cols={[t("admin.workspaces.name"), t("admin.workspaces.slug"), t("admin.workspaces.owner"), t("admin.workspaces.members"), t("admin.workspaces.agents"), t("admin.workspaces.created"), { label: "", right: true }]}
+        empty={!err ? t("admin.workspaces.empty") : undefined}
+      >
+        {servers.map((srv) => (
+          <tr key={srv.id}>
+            <td>{srv.name}</td>
+            <td>{srv.slug}</td>
+            <td>{srv.ownerName ?? "—"}</td>
+            <td>{srv.memberCount}</td>
+            <td>{srv.agentCount}</td>
+            <td>{new Date(srv.createdAt).toLocaleDateString()}</td>
+            <td style={{ textAlign: "right" }}>
+              <RowMenu ariaLabel={srv.name} disabled={busy} items={[
+                { label: t("admin.menu.deleteWorkspace"), danger: true, onClick: () => remove(srv) },
+              ]} />
             </td>
-          </tr>))}</tbody>
-      </table>
-      {servers.length === 0 && !err && <div className="empty">{t("admin.workspaces.empty")}</div>}
+          </tr>
+        ))}
+      </AdminTable>
     </div>
   );
 }
