@@ -87,9 +87,10 @@ System-admin surface (all gate 1.5, all audit-logged):
   `POST /api/admin/users/:id/reset-password` (returns a one-time temp password; the old one is destroyed).
 - **Account invites** (the register-closed path) — admin `GET/POST /api/admin/invites` +
   `DELETE /api/admin/invites/:id` (revocation = hard delete; re-invite after accept/revoke allowed,
-  after expiry the stale row is replaced). Public, rate-limited (10/min/IP):
-  `GET /api/auth/system-invite-info?token=` (email **masked** via `maskEmail` — a leaked token must
-  not recover the address) and `POST /api/auth/accept-system-invite`, which creates the account,
+  after expiry the stale row is replaced). Public `GET /api/auth/system-invite-info?token=` — email
+  **masked** via `maskEmail` (a leaked token must not recover the address); no rate limit, same
+  convention as `invite-info`/`config`. `POST /api/auth/accept-system-invite` (rate-limited
+  10/min/IP) creates the account,
   joins the target workspace with the granted role, auto-joins `#all`, and signs the user in. Any
   non-usable token (never existed / revoked / expired / used) → `410 invite_<status>`; duplicate
   pending invite per email → 409.

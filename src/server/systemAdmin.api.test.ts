@@ -137,6 +137,9 @@ test("admin users: list, disable/enable, grant/revoke sysadmin, self-guard, rese
   assert.ok(typeof temp === "string" && temp.length >= 10);
   assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: "password-1" }) })).status, 401);
   assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pleb.email, password: temp }) })).status, 200);
+
+  // unmatched /api/admin/* path (guard passed) → 404 inside the handler, never gate-2's misleading 400
+  assert.equal((await api("/api/admin/nonexistent", { headers: hdr })).status, 404);
 });
 
 test("system invites: create → info → accept creates account & joins workspace; dup pending 409; revoked/expired 410; non-admin 403", async () => {
@@ -199,4 +202,10 @@ test("system invites: create → info → accept creates account & joins workspa
 
   const pleb = await insertUser({ email: `pl4-${suffix}@t.local`, name: `pl4${suffix}`, password: "password-1" });
   assert.equal((await api("/api/admin/invites", { method: "POST", headers: { authorization: `Bearer ${signUser(pleb.id)}`, "content-type": "application/json" }, body: JSON.stringify({ email: "x@y.zz", serverId: srv.id }) })).status, 403);
+
+  // accepting an invite whose email is already registered → 409 (fresh username, so it's the email that clashes)
+  const plebInv: any = await (await api("/api/admin/invites", { method: "POST", headers: hdr, body: JSON.stringify({ email: pleb.email, serverId: srv.id }) })).json();
+  const dupAcc = await api("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: plebInv.invite.token, name: `zz${suffix}`, password: "password-1" }) });
+  assert.equal(dupAcc.status, 409);
+  assert.equal(((await dupAcc.json()) as any).code, "auth_register_email_taken");
 });

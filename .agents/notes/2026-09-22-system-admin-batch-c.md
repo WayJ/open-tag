@@ -91,6 +91,27 @@ Spec 评审发现并复现的缺陷 + 2 项测试补强：
 - 证据：修复前红（`500 !== 409`）；修复后同命令连跑两次 4 pass / 0 fail；
   `npm run typecheck` → exit 0。
 
+## 收尾修复（同日：`refactor(admin): batch-C review follow-ups`）
+
+质量评审通过后的 follow-up，行为零变更（除补强断言外）：
+
+- [Important] `docs/authorization.md` 措辞改准：限流只覆盖
+  `POST /api/auth/accept-system-invite`；`GET /api/auth/system-invite-info`
+  无限流（与 invite-info/config 惯例一致）。
+- [Minor] admin.ts 两处手写过期判断改用 `inviteStatus()`（GET invites 的
+  status 派生 + POST dup 的过期分支），`new Date(r.expiresAt as any)` 全部
+  去除。
+- [Minor] POST invites 的过期 dup 清理从按 dup.id 删改为无条件
+  `delete().where(and(eq(email), isNull(acceptedAt)))`，收窄 delete-then-insert
+  并发窗口。
+- [Minor] 测试补断言：`GET /api/admin/nonexistent`（admin hdr）→ 404 非
+  400；accept 时 email 已注册 → 409 `auth_register_email_taken`。
+- [Minor] `docs/tech-debt-tracker.md` 新增 I115（accept 非事务搁浅用户）、
+  I116（register email 大小写 dup 洞，既有）、I117（PATCH users body 内
+  null 语义不一致 + disabled:false 幂等重写）。
+- 证据：`npx tsx --test --test-force-exit src/server/systemAdmin.api.test.ts`
+  连跑两次 4 pass / 0 fail；`npm run typecheck` → exit 0。
+
 ## 未验证 / 跳过
 
 - 未跑浏览器 E2E（本批纯 REST，无 UI；dev:e2e 面向 agent runtime，不需要）。

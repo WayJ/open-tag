@@ -7,6 +7,7 @@ import { db, schema } from "../../db/index.js";
 import { hashPassword, isValidEmail, newKey } from "../auth.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
 import { openRegistrationEnabled, setOpenRegistration } from "../systemSettings.js";
+import { inviteStatus } from "../systemAdminPolicy.js";
 import { logAudit } from "../audit.js";
 
 export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null): Promise<boolean> {
@@ -77,7 +78,8 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
     const rows = await db.select().from(schema.systemInvites);
     const srvs = await db.select({ id: schema.servers.id, name: schema.servers.name }).from(schema.servers);
     const nameById = new Map(srvs.map((s) => [s.id, s.name]));
-    return (sendJson(ctx.res, 200, { invites: rows.map((r) => ({ ...r, serverName: nameById.get(r.serverId) ?? null, status: r.acceptedAt ? "accepted" : (r.expiresAt && new Date(r.expiresAt as any).getTime() < Date.now() ? "expired" : "pending") })) }), true);
+    const statusOf = (r: typeof rows[number]) => { const s = inviteStatus(r); return s === "used" ? "accepted" : s === "expired" ? "expired" : "pending"; };
+    return (sendJson(ctx.res, 200, { invites: rows.map((r) => ({ ...r, serverName: nameById.get(r.serverId) ?? null, status: statusOf(r) })) }), true);
   }
   if (ctx.p === "/api/admin/invites" && ctx.method === "POST") {
     const b = await readJson(ctx.req);
@@ -92,8 +94,11 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
     // live pending one; reading "the first row" could return the accepted one, skip the 409, and blow
     // up the insert on the pending-email partial unique index with a 500.
     const dup = (await db.select().from(schema.systemInvites).where(and(eq(schema.systemInvites.email, String(b.email).toLowerCase()), isNull(schema.systemInvites.acceptedAt))))[0];
-    if (dup && !(dup.expiresAt && new Date(dup.expiresAt as any).getTime() < Date.now())) return (sendErr(ctx.res, 409, "a pending invite for this email already exists"), true);
-    if (dup) await db.delete(schema.systemInvites).where(eq(schema.systemInvites.id, dup.id)); // stale expired row: clear it or the pending-email partial unique index would reject the re-invite with a 500
+    if (dup && inviteStatus(dup) !== "expired") return (sendErr(ctx.res, 409, "a pending invite for this email already exists"), true);
+    // Stale-row cleanup before insert: delete by (email, pending) unconditionally rather than by
+    // dup.id — closes the delete-then-insert window where a row could slip in between the read
+    // and the delete and still trip the pending-email partial unique index with a 500.
+    await db.delete(schema.systemInvites).where(and(eq(schema.systemInvites.email, String(b.email).toLowerCase()), isNull(schema.systemInvites.acceptedAt)));
     const [inv] = await db.insert(schema.systemInvites).values({
       email: String(b.email).toLowerCase(), token: newKey("inv_"), serverId: srv.id,
       role: b.role != null ? String(b.role) : "member", createdByUserId: ctx.userId,
