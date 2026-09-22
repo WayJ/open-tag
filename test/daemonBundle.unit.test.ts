@@ -1,5 +1,6 @@
 // Unit test: daemon bundle HTTP serving (the logic behind public GET/HEAD /daemon/cli.mjs and
-// /daemon/agent-cli.mjs). Pure functions with injectable paths — no DB, no server, no built bundle
+// /daemon/agent-cli.mjs) plus the server-generated install scripts behind GET /daemon/install.sh
+// and /daemon/install.ps1. Pure functions with injectable paths — no DB, no server, no built bundle
 // required (packages/daemon/dist/* is gitignored, so tests must not depend on it).
 // Run: npx tsx --test --test-force-exit test/daemonBundle.unit.test.ts
 import test from "node:test";
@@ -9,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { serveDaemonBundleFrom, daemonBundlePath, daemonBundleExists, DAEMON_BUNDLE_PATH, DAEMON_AGENT_CLI_PATH } from "../src/server/daemonBundle.ts";
+import { serveDaemonBundleFrom, daemonBundlePath, daemonBundleExists, DAEMON_BUNDLE_PATH, DAEMON_AGENT_CLI_PATH, installSh, installPs1, shQuote, psQuote, serveDaemonInstallScript } from "../src/server/daemonBundle.ts";
 
 // ── Mock res (same capture shape as test/channelAccess.integration.ts makeRes) ──
 // writeHead also records the headers map so content-type / cache-control / content-length are assertable.
@@ -135,4 +136,83 @@ test("daemonBundleExists: true only when BOTH bundles are present in the dir", a
   assert.equal(await daemonBundleExists(onlyCliDir), false, "cli.mjs alone must not count as distributable");
   assert.equal(await daemonBundleExists(onlyAgentCliDir), false, "agent-cli.mjs alone must not count as distributable");
   assert.equal(await daemonBundleExists(emptyDir), false);
+});
+
+// ── Server-generated install scripts (GET /daemon/install.sh|install.ps1?server=&key=) ──
+// The script embeds the requester's origin+key, so quoting must keep hostile-looking values
+// (quotes, spaces, &) inert inside single-quoted words in both sh and PowerShell.
+
+test("shQuote / psQuote: wrap in single quotes, escaping embedded quotes the way each shell parses", () => {
+  assert.equal(shQuote("plain"), "'plain'");
+  assert.equal(shQuote("sk'ab c&d"), "'sk'\\''ab c&d'"); // ' → '\'' — the only escape sh single quotes need
+  assert.equal(psQuote("plain"), "'plain'");
+  assert.equal(psQuote("sk'ab c&d"), "'sk''ab c&d'"); // ' → '' — PowerShell doubling
+});
+
+test("installSh: embeds origin (as download URLs + --server-url) and key inside single quotes", () => {
+  const sh = installSh("https://x.test", "sk_machine_abc");
+  assert.ok(sh.startsWith("#!/bin/sh\n"));
+  assert.ok(sh.includes("set -e"));
+  assert.ok(sh.includes('DIR="$HOME/.open-tag/daemon"'), "must install into ONE stable dir");
+  assert.ok(sh.includes('mkdir -p "$DIR"'));
+  assert.ok(sh.includes('curl -fsSL -o "$DIR/cli.mjs" \'https://x.test/daemon/cli.mjs\''));
+  assert.ok(sh.includes('curl -fsSL -o "$DIR/agent-cli.mjs" \'https://x.test/daemon/agent-cli.mjs\''));
+  assert.ok(sh.includes("exec node \"$DIR/cli.mjs\" --server-url 'https://x.test' --api-key 'sk_machine_abc'"));
+});
+
+test("installPs1: embeds origin and key inside single quotes", () => {
+  const ps1 = installPs1("https://x.test", "sk_machine_abc");
+  assert.ok(ps1.includes("$ErrorActionPreference = 'Stop'"));
+  assert.ok(ps1.includes("$Dir = Join-Path $env:USERPROFILE '.open-tag\\daemon'"), "must install into ONE stable dir");
+  assert.ok(ps1.includes("New-Item -Force -ItemType Directory $Dir | Out-Null"));
+  assert.ok(ps1.includes("Invoke-WebRequest -UseBasicParsing -Uri 'https://x.test/daemon/cli.mjs' -OutFile (Join-Path $Dir 'cli.mjs')"));
+  assert.ok(ps1.includes("Invoke-WebRequest -UseBasicParsing -Uri 'https://x.test/daemon/agent-cli.mjs' -OutFile (Join-Path $Dir 'agent-cli.mjs')"));
+  assert.ok(ps1.includes("& node (Join-Path $Dir 'cli.mjs') --server-url 'https://x.test' --api-key 'sk_machine_abc'"));
+});
+
+test("installers keep injection-shaped values inert: quote/space/& values stay one quoted word", () => {
+  const sh = installSh("https://x.test/a&b", "k'y sp&ce");
+  // The escaped form 'k'\''y sp&ce' parses back to the literal k'y sp&ce — one single-quoted word,
+  // so the space can't split args and & can't background a command.
+  assert.ok(sh.includes("--api-key 'k'\\''y sp&ce'"));
+  assert.ok(sh.includes("--server-url 'https://x.test/a&b'"));
+  const ps1 = installPs1("https://x.test/a&b", "k'y sp&ce");
+  // PS doubling: 'k''y sp&ce' parses back to the literal k'y sp&ce inside one quoted argument.
+  assert.ok(ps1.includes("--api-key 'k''y sp&ce'"));
+  assert.ok(ps1.includes("--server-url 'https://x.test/a&b'"));
+});
+
+test("install endpoint: missing server or key query param → handled, 400 JSON (sendErr shape)", () => {
+  for (const qs of ["", "?server=https://x.test", "?key=sk_machine_abc"]) {
+    const { res, getStatus, getBody, getHeaders } = makeRes();
+    const handled = serveDaemonInstallScript(res, new URL(`http://x/daemon/install.sh${qs}`), "sh");
+    assert.equal(handled, true);
+    assert.equal(getStatus(), 400);
+    assert.ok(String(getHeaders()["content-type"]).startsWith("application/json"), `qs=${qs}`);
+    const parsed = JSON.parse(getBody()) as { error?: string };
+    assert.equal(typeof parsed.error, "string");
+    assert.ok(parsed.error!.length > 0);
+  }
+});
+
+test("install endpoint (sh): both params present → 200, text/x-shellscript, no-store, body = installSh", () => {
+  const { res, getStatus, getBody, getHeaders } = makeRes();
+  const url = new URL("http://x/daemon/install.sh?server=https%3A%2F%2Fx.test&key=sk_machine_abc");
+  const handled = serveDaemonInstallScript(res, url, "sh");
+  assert.equal(handled, true);
+  assert.equal(getStatus(), 200);
+  assert.ok(String(getHeaders()["content-type"]).startsWith("text/x-shellscript"));
+  assert.equal(getHeaders()["cache-control"], "no-store");
+  assert.equal(getBody(), installSh("https://x.test", "sk_machine_abc"));
+});
+
+test("install endpoint (ps1): both params present → 200, text/x-powershell, no-store, body = installPs1", () => {
+  const { res, getStatus, getBody, getHeaders } = makeRes();
+  const url = new URL("http://x/daemon/install.ps1?server=https%3A%2F%2Fx.test&key=sk_machine_abc");
+  const handled = serveDaemonInstallScript(res, url, "ps1");
+  assert.equal(handled, true);
+  assert.equal(getStatus(), 200);
+  assert.ok(String(getHeaders()["content-type"]).startsWith("text/x-powershell"));
+  assert.equal(getHeaders()["cache-control"], "no-store");
+  assert.equal(getBody(), installPs1("https://x.test", "sk_machine_abc"));
 });

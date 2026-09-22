@@ -16,7 +16,7 @@ import { reconcileMachinesOnBoot, startMachineSweeper } from "./machineLiveness.
 import { sendJson, sendErr } from "./util.js";
 import { createLogger } from "../log.js";
 import { shouldServeAppShell } from "./staticRoutes.js";
-import { serveDaemonBundle } from "./daemonBundle.js";
+import { serveDaemonBundle, serveDaemonInstallScript } from "./daemonBundle.js";
 import { dispatchConversationTurn } from "./core.js";
 import { startConversationTurnScheduler } from "./conversationTurns.js";
 
@@ -120,6 +120,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (url.pathname === "/health") return sendJson(res, 200, { ok: true, service: "open-tag", time: new Date().toISOString() });
     if ((method === "GET" || method === "HEAD") && (url.pathname === "/daemon/cli.mjs" || url.pathname === "/daemon/agent-cli.mjs")) return void await serveDaemonBundle(res, url.pathname === "/daemon/agent-cli.mjs" ? "agent-cli" : "cli", method === "HEAD");
+    if (method === "GET" && (url.pathname === "/daemon/install.sh" || url.pathname === "/daemon/install.ps1")) return void serveDaemonInstallScript(res, url, url.pathname === "/daemon/install.sh" ? "sh" : "ps1");
     if (await handleAgentApi(req, res, url, method)) return;
     if (await handleApi(req, res, url, method)) return;
     const isRead = method === "GET" || method === "HEAD";

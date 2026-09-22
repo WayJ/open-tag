@@ -4,15 +4,16 @@ import assert from "node:assert/strict";
 import { daemonConnectCommands } from "../web/src/machineUi.ts";
 
 // bundleAvailable mirrors the server's daemonBundleAvailable flag (GET /daemon/cli.mjs + /daemon/agent-cli.mjs
-// serve the two-bundle set). When true the connect wizard shows per-platform commands that download BOTH
-// files into one directory (the daemon resolves agent-cli.mjs as a sibling of itself) instead of the npx fallback.
+// serve the two-bundle set the install scripts download). When true the connect wizard shows per-platform
+// one-pipe install commands — the server generates the script (GET /daemon/install.sh|install.ps1) with
+// origin+key baked in — instead of the npx fallback.
 
-test("bundle available and no template → per-platform two-file download commands with the real machine key", () => {
+test("bundle available and no template → per-platform one-pipe install commands with the real machine key", () => {
   const set = daemonConnectCommands("https://x.test", "sk_machine_abc", { bundleAvailable: true });
   assert.deepEqual(set, {
     kind: "platform",
-    bash: "mkdir -p /tmp/open-tag && curl -fsSL https://x.test/daemon/cli.mjs -o /tmp/open-tag/cli.mjs && curl -fsSL https://x.test/daemon/agent-cli.mjs -o /tmp/open-tag/agent-cli.mjs && node /tmp/open-tag/cli.mjs --server-url https://x.test --api-key sk_machine_abc",
-    powershell: 'New-Item -Force -ItemType Directory $env:TEMP\\open-tag | Out-Null; Invoke-WebRequest -Uri https://x.test/daemon/cli.mjs -OutFile $env:TEMP\\open-tag\\cli.mjs; Invoke-WebRequest -Uri https://x.test/daemon/agent-cli.mjs -OutFile $env:TEMP\\open-tag\\agent-cli.mjs; node "$env:TEMP\\open-tag\\cli.mjs" --server-url https://x.test --api-key sk_machine_abc',
+    bash: 'curl -fsSL "https://x.test/daemon/install.sh?server=https://x.test&key=sk_machine_abc" | bash',
+    powershell: 'iwr -useb "https://x.test/daemon/install.ps1?server=https://x.test&key=sk_machine_abc" | iex',
   });
 });
 
