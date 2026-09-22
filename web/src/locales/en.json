@@ -597,7 +597,9 @@
       "enableUser": "Enable user",
       "promote": "Grant sysadmin",
       "demote": "Revoke sysadmin",
-      "resetPassword": "Reset password"
+      "resetPassword": "Reset password",
+      "copyLink": "Copy link",
+      "revokeInvite": "Revoke invite"
     },
     "users": {
       "search": "Search email/username (Enter)",
@@ -638,6 +640,9 @@
     },
     "invites": {
       "email": "Invitee email",
+      "createCta": "＋ New invite",
+      "workspace": "Workspace",
+      "role": "Role",
       "pickWorkspace": "Pick a workspace…",
       "roleMember": "Member",
       "roleAdmin": "Admin",

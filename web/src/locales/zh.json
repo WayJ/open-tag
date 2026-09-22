@@ -597,7 +597,9 @@
       "enableUser": "启用用户",
       "promote": "设为系统管理员",
       "demote": "撤销系统管理员",
-      "resetPassword": "重置密码"
+      "resetPassword": "重置密码",
+      "copyLink": "复制链接",
+      "revokeInvite": "撤销邀请"
     },
     "users": {
       "search": "搜索邮箱/用户名（回车）",
@@ -638,6 +640,9 @@
     },
     "invites": {
       "email": "受邀人邮箱",
+      "createCta": "＋ 生成邀请",
+      "workspace": "Workspace",
+      "role": "角色",
       "pickWorkspace": "选择 Workspace…",
       "roleMember": "成员 (member)",
       "roleAdmin": "管理员 (admin)",
