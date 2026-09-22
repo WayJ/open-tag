@@ -9,26 +9,26 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { serveDaemonBundleFrom } from "../src/server/daemonBundle.ts";
+import { serveDaemonBundleFrom, DAEMON_BUNDLE_PATH } from "../src/server/daemonBundle.ts";
 
 // ── Mock res (same capture shape as test/channelAccess.integration.ts makeRes) ──
-// writeHead also records the headers map so content-type / cache-control are assertable.
+// writeHead also records the headers map so content-type / cache-control / content-length are assertable.
 function makeRes(): {
   res: ServerResponse;
   getStatus: () => number;
   getBody: () => string;
   getRawBody: () => string | Buffer | undefined;
-  getHeaders: () => Record<string, string>;
+  getHeaders: () => Record<string, string | number>;
 } {
   let status = 0;
   let raw: string | Buffer | undefined;
-  let headers: Record<string, string> = {};
+  let headers: Record<string, string | number> = {};
   const emitter = new EventEmitter();
   const res = Object.assign(emitter, {
     statusCode: 0,
     headersSent: false,
     setHeader(_n: string, _v: unknown) {},
-    writeHead(code: number, hdrs: Record<string, string> = {}) {
+    writeHead(code: number, hdrs: Record<string, string | number> = {}) {
       status = code;
       this.statusCode = code;
       headers = hdrs;
@@ -55,13 +55,14 @@ const BUNDLE_BYTES = Buffer.from("// fake daemon bundle\nconsole.log('open-tag d
 writeFileSync(bundlePath, BUNDLE_BYTES);
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
-test("GET existing bundle: handled, 200, text/javascript, no-cache, exact file bytes", async () => {
+test("GET existing bundle: handled, 200, text/javascript, no-cache, content-length, exact file bytes", async () => {
   const { res, getStatus, getRawBody, getHeaders } = makeRes();
   const handled = await serveDaemonBundleFrom(res, bundlePath, false);
   assert.equal(handled, true);
   assert.equal(getStatus(), 200);
-  assert.ok(getHeaders()["content-type"]?.startsWith("text/javascript"), `content-type was ${getHeaders()["content-type"]}`);
+  assert.ok(String(getHeaders()["content-type"]).startsWith("text/javascript"), `content-type was ${getHeaders()["content-type"]}`);
   assert.equal(getHeaders()["cache-control"], "no-cache");
+  assert.equal(getHeaders()["content-length"], BUNDLE_BYTES.length);
   assert.deepEqual(getRawBody(), BUNDLE_BYTES); // body equals file bytes
 });
 
@@ -70,18 +71,32 @@ test("GET missing bundle: handled, 404, JSON error body (sendErr shape)", async 
   const handled = await serveDaemonBundleFrom(res, missingPath, false);
   assert.equal(handled, true);
   assert.equal(getStatus(), 404);
-  assert.ok(getHeaders()["content-type"]?.startsWith("application/json"));
+  assert.ok(String(getHeaders()["content-type"]).startsWith("application/json"));
   const parsed = JSON.parse(getBody()) as { error?: string };
   assert.equal(typeof parsed.error, "string");
   assert.ok(parsed.error!.length > 0);
 });
 
-test("HEAD existing bundle: same 200 + headers, end() called with NO data", async () => {
+test("HEAD missing bundle: same 404 as GET", async () => {
+  const { res, getStatus, getBody } = makeRes();
+  const handled = await serveDaemonBundleFrom(res, missingPath, true);
+  assert.equal(handled, true);
+  assert.equal(getStatus(), 404);
+  const parsed = JSON.parse(getBody()) as { error?: string };
+  assert.equal(typeof parsed.error, "string");
+});
+
+test("HEAD existing bundle: same 200 + headers (incl. content-length), end() called with NO data", async () => {
   const { res, getStatus, getRawBody, getHeaders } = makeRes();
   const handled = await serveDaemonBundleFrom(res, bundlePath, true);
   assert.equal(handled, true);
   assert.equal(getStatus(), 200);
-  assert.ok(getHeaders()["content-type"]?.startsWith("text/javascript"));
+  assert.ok(String(getHeaders()["content-type"]).startsWith("text/javascript"));
   assert.equal(getHeaders()["cache-control"], "no-cache");
+  assert.equal(getHeaders()["content-length"], BUNDLE_BYTES.length); // HEAD metadata parity
   assert.equal(getRawBody(), undefined); // empty body on HEAD
+});
+
+test("default bundle path points at packages/daemon/dist/cli.mjs", () => {
+  assert.ok(DAEMON_BUNDLE_PATH.endsWith(path.join("packages", "daemon", "dist", "cli.mjs")), `path was ${DAEMON_BUNDLE_PATH}`);
 });

@@ -42,10 +42,10 @@
 - Create: worktree `open-tag-server-daemon-dist`（`npm run wt:add -- server-daemon-dist`，从 main repo 根执行）
 - Create: `docs/superpowers/plans/2026-09-22-daemon-server-distribution.md`（本计划副本，repo 惯例）
 
-- [ ] Step 1: 主 checkout 根目录 `npm run wt:add -- server-daemon-dist`
-- [ ] Step 2: `cd ../open-tag-server-daemon-dist`
-- [ ] Step 3: 把本计划文件复制为 `docs/superpowers/plans/2026-09-22-daemon-server-distribution.md`，并在 `docs/PLANS.md` 按其惯例挂索引
-- [ ] Step 4: Commit `docs: plan for server-distributed daemon bundle`
+- [x] Step 1: 主 checkout 根目录 `npm run wt:add -- server-daemon-dist`
+- [x] Step 2: `cd ../open-tag-server-daemon-dist`
+- [x] Step 3: 把本计划文件复制为 `docs/superpowers/plans/2026-09-22-daemon-server-distribution.md`，并在 `docs/PLANS.md` 按其惯例挂索引
+- [x] Step 4: Commit `docs: plan for server-distributed daemon bundle`
 
 ### Task 1: server 端 daemonBundle 模块 + 公开端点（TDD）
 
@@ -55,7 +55,7 @@
 - Modify: `src/server/index.ts`（dispatch 插入，:120 `/health` 之后）
 - Modify: `src/server/routes-api/servers.ts:236`（machines 响应加 `daemonBundleAvailable`）
 
-- [ ] Step 1: 写失败测试 `test/daemonBundle.unit.test.ts`。可注入路径的纯函数，无需 DB：
+- [x] Step 1: 写失败测试 `test/daemonBundle.unit.test.ts`。可注入路径的纯函数，无需 DB：
 
 ```ts
 // Run: npx tsx --test --test-force-exit test/daemonBundle.unit.test.ts
@@ -86,8 +86,8 @@ function mockRes() {
   2. 文件缺失 → 返回 `true`（路由已匹配），status 404 JSON error body。
   3. 路径不匹配（非 GET 或非 `/daemon/cli.mjs`）→ 由 index.ts dispatch 保证，不在本模块测。
 
-- [ ] Step 2: 跑测试确认失败（模块不存在）
-- [ ] Step 3: 实现 `src/server/daemonBundle.ts`：
+- [x] Step 2: 跑测试确认失败（模块不存在）
+- [x] Step 3: 实现 `src/server/daemonBundle.ts`：
 
 ```ts
 // Serves the self-contained daemon bundle (packages/daemon/dist/cli.mjs, built by
@@ -118,8 +118,8 @@ export async function serveDaemonBundle(res: import("node:http").ServerResponse)
 
   并加 `daemonBundleExists(): Promise<boolean>`（`stat` try/catch）供 servers.ts 用。
 
-- [ ] Step 4: 跑测试确认通过
-- [ ] Step 5: `src/server/index.ts` dispatch（:120 `/health` 行后）插入（GET+HEAD，同 `/docs` 静态只读惯例；Node 对 HEAD 自动丢弃 body）：
+- [x] Step 4: 跑测试确认通过
+- [x] Step 5: `src/server/index.ts` dispatch（:120 `/health` 行后）插入（GET+HEAD，同 `/docs` 静态只读惯例；Node 对 HEAD 自动丢弃 body）：
 
 ```ts
 if ((method === "GET" || method === "HEAD") && url.pathname === "/daemon/cli.mjs") return void await serveDaemonBundle(res);
@@ -127,9 +127,9 @@ if ((method === "GET" || method === "HEAD") && url.pathname === "/daemon/cli.mjs
 
   （import 加 `serveDaemonBundle`。单元测试用 HEAD 再补一条：status/headers 相同、body 为空——mock res 需模拟 Node 丢弃行为或直接断言实现侧对 HEAD 调 `res.end()` 不传 data；KISS：实现里 `res.end(method === "HEAD" ? undefined : data)` 显式化，测试直测该分支。）
 
-- [ ] Step 6: `servers.ts:236` machines 响应对象追加字段：`daemonBundleAvailable: await daemonBundleExists()`（import 自 `../daemonBundle.js`）。
-- [ ] Step 7: `npm run typecheck`（root）通过
-- [ ] Step 8: Commit `feat(server): serve daemon bundle at GET /daemon/cli.mjs + availability flag`
+- [x] Step 6: `servers.ts:236` machines 响应对象追加字段：`daemonBundleAvailable: await daemonBundleExists()`（import 自 `../daemonBundle.js`）。
+- [x] Step 7: `npm run typecheck`（root）通过
+- [x] Step 8: Commit `feat(server): serve daemon bundle at GET /daemon/cli.mjs + availability flag`
 
 ### Task 2: web 命令生成器（TDD）
 
