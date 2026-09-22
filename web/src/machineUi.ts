@@ -34,11 +34,13 @@ export function isDaemonUpdateAvailable(machine: MachineVersionState | null | un
 export const DEFAULT_DAEMON_COMMAND = "npx @fancyboi999/open-tag-daemon@latest --server-url {origin} --api-key {key}";
 export const KEY_PLACEHOLDER = "<your sk_machine_... key>";
 
-// Server-distributed bundle commands (GET {origin}/daemon/cli.mjs): download once, run with node —
-// no npm round-trip, and the daemon version always matches the server. Same {origin}/{key} placeholders
-// as any other template, rendered by renderDaemonCommand.
-const BUNDLE_CMD_BASH = "curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag-daemon.mjs && node /tmp/open-tag-daemon.mjs --server-url {origin} --api-key {key}";
-const BUNDLE_CMD_POWERSHELL = "Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\\open-tag-daemon.mjs; node \"$env:TEMP\\open-tag-daemon.mjs\" --server-url {origin} --api-key {key}";
+// Server-distributed bundle commands (GET {origin}/daemon/cli.mjs + /daemon/agent-cli.mjs): download
+// BOTH bundles into one directory, run cli.mjs with node — no npm round-trip, and the daemon version
+// always matches the server. The two files must land in the SAME dir: the daemon resolves agent-cli.mjs
+// as a sibling of itself, so a lone cli.mjs breaks agents' `open-tag` command. Same {origin}/{key}
+// placeholders as any other template, rendered by renderDaemonCommand.
+const BUNDLE_CMD_BASH = "mkdir -p /tmp/open-tag && curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag/cli.mjs && curl -fsSL {origin}/daemon/agent-cli.mjs -o /tmp/open-tag/agent-cli.mjs && node /tmp/open-tag/cli.mjs --server-url {origin} --api-key {key}";
+const BUNDLE_CMD_POWERSHELL = "New-Item -Force -ItemType Directory $env:TEMP\\open-tag | Out-Null; Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\\open-tag\\cli.mjs; Invoke-WebRequest -Uri {origin}/daemon/agent-cli.mjs -OutFile $env:TEMP\\open-tag\\agent-cli.mjs; node \"$env:TEMP\\open-tag\\cli.mjs\" --server-url {origin} --api-key {key}";
 
 function renderDaemonCommand(template: string, origin: string, key: string): string {
   return template.split("{origin}").join(origin).split("{key}").join(key);

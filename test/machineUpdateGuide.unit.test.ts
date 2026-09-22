@@ -23,12 +23,12 @@ test("update guidance is not shown for offline, current, newer, unknown, or no-l
   assert.equal(isDaemonUpdateAvailable({ status: "online", daemonVersion: "0.5.0" }, ""), false);
 });
 
-test("bundle available → platform commands with the key placeholder, not a real key", () => {
+test("bundle available → platform two-file download commands with the key placeholder, not a real key", () => {
   const set = daemonUpdateCommands("https://tag.example.com", { bundleAvailable: true });
   assert.deepEqual(set, {
     kind: "platform",
-    bash: "curl -fsSL https://tag.example.com/daemon/cli.mjs -o /tmp/open-tag-daemon.mjs && node /tmp/open-tag-daemon.mjs --server-url https://tag.example.com --api-key <your sk_machine_... key>",
-    powershell: 'Invoke-WebRequest -Uri https://tag.example.com/daemon/cli.mjs -OutFile $env:TEMP\\open-tag-daemon.mjs; node "$env:TEMP\\open-tag-daemon.mjs" --server-url https://tag.example.com --api-key <your sk_machine_... key>',
+    bash: "mkdir -p /tmp/open-tag && curl -fsSL https://tag.example.com/daemon/cli.mjs -o /tmp/open-tag/cli.mjs && curl -fsSL https://tag.example.com/daemon/agent-cli.mjs -o /tmp/open-tag/agent-cli.mjs && node /tmp/open-tag/cli.mjs --server-url https://tag.example.com --api-key <your sk_machine_... key>",
+    powershell: 'New-Item -Force -ItemType Directory $env:TEMP\\open-tag | Out-Null; Invoke-WebRequest -Uri https://tag.example.com/daemon/cli.mjs -OutFile $env:TEMP\\open-tag\\cli.mjs; Invoke-WebRequest -Uri https://tag.example.com/daemon/agent-cli.mjs -OutFile $env:TEMP\\open-tag\\agent-cli.mjs; node "$env:TEMP\\open-tag\\cli.mjs" --server-url https://tag.example.com --api-key <your sk_machine_... key>',
   });
   assert.doesNotMatch(set.bash + set.powershell, /sk_machine_[A-Za-z0-9]{8,}/, "update flow must not pretend to know the stored machine key");
 });
