@@ -3,11 +3,12 @@
 # This unit is for the BARE NODE.JS path (see docs/self-host.md "Bare Node.js").
 # It requires: the repo cloned at WorkingDirectory, and tsx available on PATH.
 #
-# DOCKER COMPOSE users: the daemon still runs on the HOST (not in a container),
-# but you should use the published npm package form (no repo needed):
-#   ExecStart=/usr/bin/env npx @fancyboi999/open-tag-daemon@latest \
-#     --server-url http://localhost:7788 \
-#     --api-key change-me
+# DOCKER COMPOSE users: the daemon still runs on the HOST (not in a container), and no repo
+# is needed — run the server-generated installer once (it installs the daemon bundles your
+# server distributes to ~/.open-tag/daemon):
+#   curl -fsSL "http://localhost:7788/daemon/install.sh?server=http://localhost:7788&key=<key>" | bash
+# then point ExecStart at the installed bundle (see the no-repo form commented out in
+# [Service] below). Update = stop the service, re-run the installer, start the service.
 # (7788 is the Docker Compose default port; adjust OPEN_TAG_SERVER_URL below accordingly.)
 #
 # SETUP (run as root or with sudo):
@@ -73,8 +74,10 @@ ExecStart=/usr/bin/env npx tsx src/daemon/index.ts \
   --server-url ${OPEN_TAG_SERVER_URL} \
   --api-key ${OPEN_TAG_API_KEY}
 
-# Docker Compose / no-repo form — uncomment and comment out the bare form above:
-# ExecStart=/usr/bin/env npx @fancyboi999/open-tag-daemon@latest \
+# Docker Compose / no-repo form (run the server's install command once first so the bundles
+# exist at ~/.open-tag/daemon; adjust the path to the service User's home) — uncomment and
+# comment out the bare form above:
+# ExecStart=/usr/bin/node /home/ubuntu/.open-tag/daemon/cli.mjs \
 #   --server-url ${OPEN_TAG_SERVER_URL} \
 #   --api-key ${OPEN_TAG_API_KEY}
 

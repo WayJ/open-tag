@@ -132,21 +132,25 @@ control plane over WebSocket using `DAEMON_BOOTSTRAP_KEY`.
 **Same machine** (daemon on the VPS):
 
 ```bash
-# Using the published npm package — no repo clone needed:
 export OPEN_TAG_PROJECT_ROOTS='["/srv/projects"]'
-npx @fancyboi999/open-tag-daemon@latest \
-  --server-url http://localhost:7788 \
-  --api-key <DAEMON_BOOTSTRAP_KEY>
+curl -fsSL "http://localhost:7788/daemon/install.sh?server=http://localhost:7788&key=<DAEMON_BOOTSTRAP_KEY>" | bash
 ```
 
 **Remote machine** (daemon on your dev machine or another server):
 
 ```bash
 export OPEN_TAG_PROJECT_ROOTS='["/absolute/path/to/projects"]'
-npx @fancyboi999/open-tag-daemon@latest \
-  --server-url https://your-domain.com \
-  --api-key <DAEMON_BOOTSTRAP_KEY>
+curl -fsSL "https://your-domain.com/daemon/install.sh?server=https://your-domain.com&key=<DAEMON_BOOTSTRAP_KEY>" | bash
 ```
+
+> **How this works**: the one-liner fetches a server-generated install script that downloads both
+> self-contained daemon bundles to `~/.open-tag/daemon` and starts the daemon from there (requires
+> Node.js 20+ on the daemon machine). The bundles are built by the server's deploy — the Docker
+> Compose image and `npm run prod:up` run `npm run pkg:daemon:build` automatically (bare Node.js
+> users: run it once after `npm run site:build`, see below) — so the daemon version always matches
+> your server. To **update** the daemon, stop the old process and re-run the same command. If the
+> server has no bundles built (404), fall back to the published npm package:
+> `npx @fancyboi999/open-tag-daemon@latest --server-url <url> --api-key <key>`.
 
 The daemon registers as a machine in the workspace. Go to **Settings → Computers** in the
 web UI to confirm it appears online.
@@ -458,6 +462,10 @@ npm --prefix web install
 npm --prefix docs-site install
 npm run site:build
 
+# Build the self-contained daemon bundles the server distributes at /daemon/*
+# (Docker / prod:up do this automatically; bare Node.js runs it explicitly)
+npm run pkg:daemon:build
+
 # Push schema (additive-safe; prompts on destructive changes)
 npm run db:push:prod
 
@@ -519,6 +527,7 @@ npm install
 npm --prefix web install
 npm --prefix docs-site install
 npm run site:build
+npm run pkg:daemon:build # rebuild the daemon bundles the server distributes
 npm run db:push:prod     # migrate schema BEFORE restarting the server
 sudo systemctl restart open-tag-server
 # Daemon stays running; it reconnects automatically after the server restarts.
@@ -535,22 +544,24 @@ docker compose --profile app up -d --build
 ```
 
 The daemon process (on the host) keeps running across server restarts and reconnects
-automatically. Restart it only when there is a new daemon version:
+automatically. Update it only when there is a new daemon version — how depends on how it was
+started:
 
 ```bash
-# Check the latest published version
+# Installed via the server install command (Step 4): stop the old daemon (Ctrl-C, or
+# `sudo systemctl stop open-tag-daemon`), then re-run the same command — it re-downloads
+# the bundles your redeployed server just built.
+# Started via the npm fallback: `sudo systemctl restart open-tag-daemon`, or just re-run
+# the npx command — @latest re-resolves. Check the newest published version with:
 npm show @fancyboi999/open-tag-daemon version
-
-# To update, restart the daemon — npx will pull the latest bundle:
-# (for systemd)
-sudo systemctl restart open-tag-daemon
-# (for a manual npx run, just re-run the command — npx @latest re-resolves)
 ```
 
-> **Daemon versioning**: the daemon ships as a separate npm package
+> **Daemon versioning**: machines get the daemon either from the server's own distributed
+> bundles (rebuilt on every server deploy) or from the separate npm package
 > (`@fancyboi999/open-tag-daemon`). A merged server change does **not** automatically
 > reach running daemon processes — they keep running the version they were started with.
-> Watch the repository releases for daemon updates and bounce the process after publishing.
+> Re-deploy the server (bundle channel) or watch the repository releases (npm channel)
+> and bounce the process afterwards.
 > Conversation Turns require daemon capability `delivery-admission-v2` (daemon 0.13.0+), and
 > settled agent lifecycle controls require `agent-control-ack-v1` (daemon 0.12.0+).
 > During a mixed-version rollout, the server fails closed: affected Turns remain paused,

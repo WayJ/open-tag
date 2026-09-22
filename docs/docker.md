@@ -14,7 +14,7 @@ against your code and credentials, so it is not containerized. You connect it yo
 |---|---|---|
 | Postgres + Redis | container | compose services `postgres`, `redis` |
 | API + web + docs (control plane) | container | compose service `app` (this image; serves the app at `/` and docs at `/docs/`) |
-| daemon + agents (compute plane) | **your host** | `npx @fancyboi999/open-tag-daemon` — connects over the published WS port |
+| daemon + agents (compute plane) | **your host** | the server-generated install command (below) — downloads the daemon bundles this image built, connects over the published WS port |
 
 ## First run
 
@@ -34,8 +34,12 @@ curl -X POST http://localhost:7788/api/auth/setup \
 #    then clear ADMIN_SETUP_TOKEN from .env.docker and restart:
 #    docker compose --profile app restart app
 
-# 4. Connect your machine (host daemon → containerized server). --api-key MUST equal DAEMON_BOOTSTRAP_KEY.
-npx @fancyboi999/open-tag-daemon@latest --server-url http://localhost:7788 --api-key <DAEMON_BOOTSTRAP_KEY>
+# 4. Connect your machine (host daemon → containerized server; Node 20+ on the host).
+#    key MUST equal DAEMON_BOOTSTRAP_KEY. Installs both bundles to ~/.open-tag/daemon and runs the
+#    daemon from there; update = stop it, re-run the same command. The image builds the bundles
+#    automatically, so the daemon version always matches this server.
+curl -fsSL "http://localhost:7788/daemon/install.sh?server=http://localhost:7788&key=<DAEMON_BOOTSTRAP_KEY>" | bash
+#    Windows host: iwr -useb "http://localhost:7788/daemon/install.ps1?server=http://localhost:7788&key=<DAEMON_BOOTSTRAP_KEY>" | iex
 ```
 
 Open `http://localhost:7788`, sign in with the admin email/password, create an agent, and mention it in `#all`.

@@ -100,57 +100,58 @@ docker compose --profile app restart app
 
 ## Step 4 — Connect the daemon
 
-The daemon runs on the same Windows host.
-
-> **Windows compatibility fixes in local repo**: The published npm daemon (`@fancyboi999/open-tag-daemon`) has two Windows issues: (1) runtime detection uses POSIX `command -v` (no runtimes detected), (2) all runtime CLI spawns use raw `spawn()` which fails on Windows + nvm4w symlink `.cmd` files. Both are fixed in the local repo. Until a new release is published, run the daemon from the local repo instead:
->
-> ```powershell
-> cd E:\open-tag
-> npx tsx src/daemon/index.ts --server-url http://localhost:7788 --api-key <DAEMON_BOOTSTRAP_KEY>
-> ```
-
-If you prefer the published package (runtime detection will return no runtimes, and agent spawns will fail on Windows):
+The daemon runs on the same Windows host (Node.js 20+ required). Run the server-generated
+installer — one pipe:
 
 ```powershell
-npx @fancyboi999/open-tag-daemon@latest `
-  --server-url http://localhost:7788 `
-  --api-key <DAEMON_BOOTSTRAP_KEY>
+iwr -useb "http://localhost:7788/daemon/install.ps1?server=http://localhost:7788&key=<DAEMON_BOOTSTRAP_KEY>" | iex
 ```
+
+It downloads both daemon bundles to `%USERPROFILE%\.open-tag\daemon` and starts the daemon
+from there. To update, stop the old daemon and re-run the same command. The Docker image
+built in Step 2 runs `npm run pkg:daemon:build` automatically, so the distributed bundles
+always match your server's code.
+
+> **Why the server-distributed bundle on Windows?** The bundles your server distributes are
+> built from this repo, which carries two Windows compatibility fixes the *published* npm
+> daemon may still lack: (1) runtime detection via PowerShell `Get-Command` instead of POSIX
+> `command -v` (which detects no runtimes on Windows), and (2) runtime CLI spawns via
+> `spawnSafe` instead of raw `spawn()` (which fails on nvm4w symlink `.cmd` files). If your
+> server does not distribute bundles, the fallback is
+> `npx @fancyboi999/open-tag-daemon@latest --server-url http://localhost:7788 --api-key <key>` —
+> check that the published version includes those fixes before relying on it (or run from a
+> local checkout: `npx tsx <repo>\src\daemon\index.ts --server-url … --api-key …`).
 
 **Long-running the daemon** (instead of keeping a terminal open):
 
 ### Option A — NSSM (recommended)
 
-Install [NSSM](https://nssm.cc/) and register the daemon as a Windows service. Run from the local repo for runtime detection:
+Install [NSSM](https://nssm.cc/) and register the daemon as a Windows service. Run the
+Step 4 installer once first (it downloads the bundles to `~\.open-tag\daemon`), then point
+the service at the installed bundle — no repo or npx needed:
 
 ```powershell
 # Install nssm via winget
 winget install nssm
 
-# Register the service (local repo path for Windows compatibility fixes)
-nssm install open-tag-daemon "C:\Program Files\nodejs\npx.cmd" `
-  "tsx E:\open-tag\src\daemon\index.ts --server-url http://localhost:7788 --api-key <key>"
-
-# Set working directory
-nssm set open-tag-daemon AppDirectory "E:\open-tag"
+# Register the service on the downloaded bundle
+nssm install open-tag-daemon "C:\Program Files\nodejs\node.exe" `
+  "$env:USERPROFILE\.open-tag\daemon\cli.mjs --server-url http://localhost:7788 --api-key <key>"
 
 # Start
 nssm start open-tag-daemon
 ```
 
-When the published daemon includes the Windows compatibility fixes, switch to:
-
-```powershell
-nssm set open-tag-daemon AppParameters " @fancyboi999/open-tag-daemon@latest --server-url http://localhost:7788 --api-key <key>"
-```
+To update the daemon under NSSM: stop the service (`nssm stop open-tag-daemon`), re-run the
+Step 4 installer (it overwrites the bundles with your server's latest build), then start the
+service again.
 
 ### Option B — Windows Task Scheduler
 
-Create a task:
+Create a task (the Step 4 installer must have run once so the bundles exist):
 - Trigger: **At startup**
-- Action: Start a program → `C:\Program Files\nodejs\npx.cmd`
-- Arguments: `tsx E:\open-tag\src\daemon\index.ts --server-url http://localhost:7788 --api-key <key>`
-- Start in: `E:\open-tag`
+- Action: Start a program → `C:\Program Files\nodejs\node.exe`
+- Arguments: `%USERPROFILE%\.open-tag\daemon\cli.mjs --server-url http://localhost:7788 --api-key <key>`
 - Run whether user is logged on or not
 
 ## Step 5 — Firewall and HTTPS
@@ -316,12 +317,14 @@ Or check what's using the default port:
 netstat -ano | Select-String ":7788"
 ```
 
-### Daemon won't start — "npx not found"
+### Daemon won't start — "node: command not found" / "npx not found"
 
-Ensure Node.js is on PATH:
+The install script and the daemon itself run `node` (npx is only used by the npm fallback).
+Ensure Node.js 20+ is on PATH:
 
 ```powershell
-npx --version   # should print a version, not an error
+node --version   # should print a version, not an error
 ```
 
-If using nvm-windows, run the daemon from a terminal where Node.js is activated, or use the full path to `npx.cmd`.
+If using nvm-windows, run the daemon from a terminal where Node.js is activated, or use the
+full path to `node.exe`.

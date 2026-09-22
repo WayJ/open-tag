@@ -25,6 +25,19 @@ There is **no master key** and no cross-plane fallback. The bootstrap key is *on
 (`ws.ts`); it is never accepted by `resolveAgent`. Raw credentials travel only in DMs / private channels,
 never in public channels (see `core-beliefs.md` §4).
 
+**Public (unauthenticated) endpoint inventory.** Outside the three planes, the server deliberately
+exposes a small no-auth surface, dispatched in `index.ts` before any gate: `GET /health` (liveness), the
+self-authenticating `/api/auth/*` endpoints (register/login/dev-login/invite-info/accept-invite/setup —
+gate 0 in `routes-api/index.ts`), and the daemon-distribution surface served by `src/server/daemonBundle.ts`:
+`GET/HEAD /daemon/cli.mjs` + `GET /daemon/agent-cli.mjs` (`no-cache`) serve the self-contained daemon
+bundles — public at the same trust level as the public npm package because **the bundles embed no
+secrets**; `GET /daemon/install.sh` / `GET /daemon/install.ps1` (`?server=<origin>&key=<machine key>`,
+missing param → 400) generate a per-request install script that downloads both bundles into
+`~/.open-tag/daemon` and starts the daemon. Accepted tradeoff: the machine key rides the **query string**
+(so it can appear in proxy/access logs — the same exposure class as the daemon WS `?key=` handshake) and
+reaches the **response body only**, which is why the script is served `cache-control: no-store` — the key
+must never linger in a shared cache, and the bundles themselves contain no key.
+
 ## 2. Human plane: role → capability model (`capabilities.ts`)
 
 A user's power in a workspace comes from their `serverMembers.role`. Capabilities are a pure lookup —

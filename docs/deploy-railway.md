@@ -37,7 +37,7 @@ Postgres               ← Railway-managed
 Redis                  ← Railway-managed
 
 (daemon)               ← YOUR machine, not Railway
-  └─ npx @fancyboi999/open-tag-daemon --server-url https://www.getopentag.com …
+  └─ curl …/daemon/install.sh | bash  (installs ~/.open-tag/daemon from this server)
 ```
 
 The server reads `PORT` from the environment (line 18 in `src/server/index.ts`:
@@ -289,10 +289,14 @@ via WebSocket. It preserves the three-plane architecture — your agent CLIs and
 credentials never leave your machine.
 
 ```bash
-npx @fancyboi999/open-tag-daemon@latest \
-  --server-url https://www.getopentag.com \
-  --api-key <DAEMON_BOOTSTRAP_KEY>
+curl -fsSL "https://www.getopentag.com/daemon/install.sh?server=https://www.getopentag.com&key=<DAEMON_BOOTSTRAP_KEY>" | bash
 ```
+
+The command fetches a server-generated install script that downloads both daemon bundles to
+`~/.open-tag/daemon` (Node.js 20+ required) and starts the daemon from there — the version
+always matches your deployment because Railway builds the bundles with the server image. To
+update, stop the old daemon and re-run the same command. (Windows:
+`iwr -useb "https://www.getopentag.com/daemon/install.ps1?server=https://www.getopentag.com&key=<DAEMON_BOOTSTRAP_KEY>" | iex`.)
 
 Use `https://www.getopentag.com` (the `www` subdomain), not the bare apex, to ensure
 WebSocket routing works regardless of which DNS option you chose in Step 7.
@@ -325,17 +329,11 @@ git pull --ff-only origin main
 
 Railway automatically rebuilds and runs the new entrypoint (schema migration + seed +
 server start) on every push to `main`. The daemon on your machine keeps running and
-reconnects automatically — restart it only when there is a new daemon package release:
-
-```bash
-# Check for new daemon version:
-npm show @fancyboi999/open-tag-daemon version
-
-# Restart with latest:
-npx @fancyboi999/open-tag-daemon@latest \
-  --server-url https://www.getopentag.com \
-  --api-key <DAEMON_BOOTSTRAP_KEY>
-```
+reconnects automatically — update it only when the daemon bundles changed with a deploy:
+stop the old daemon and re-run the install command from Step 8 (Railway rebuilt the
+bundles with the server image). Daemon installed via the npm fallback instead? Check for
+a new package version with `npm show @fancyboi999/open-tag-daemon version` and re-run the
+`npx @fancyboi999/open-tag-daemon@latest …` command (`@latest` re-resolves).
 
 ---
 
