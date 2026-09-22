@@ -31,6 +31,11 @@
   execution plan: [`docs/exec-plans/active/agent-knowledge.md`](./exec-plans/active/agent-knowledge.md)
   (code landed, daemon release pending — Task 10; live E2E pending — stays Active until merge).
 
+- **Server-distributed daemon bundle** — the connect/reconnect/update command downloads the daemon
+  from *this server* (`GET /daemon/cli.mjs`, platform one-liners) instead of `npx` from npm.
+  Plan: [`docs/superpowers/plans/2026-09-22-daemon-server-distribution.md`](./superpowers/plans/2026-09-22-daemon-server-distribution.md)
+  (worktree `server-daemon-dist`, branch `feature/server-daemon-dist`).
+
 *(Completed plans live in `docs/exec-plans/completed/`.)*
 
 ## Completed slice history (index only)
