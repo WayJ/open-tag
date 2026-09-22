@@ -209,3 +209,83 @@ test("system invites: create → info → accept creates account & joins workspa
   assert.equal(dupAcc.status, 409);
   assert.equal(((await dupAcc.json()) as any).code, "auth_register_email_taken");
 });
+
+test("admin servers/stats/audit: list counts, delete cascades, gate-2 rejection, audit rows exist", async () => {
+  const admin = await insertUser({ email: `sa5-${suffix}@t.local`, name: `sa5${suffix}`, password: "password-1", systemRole: "system_admin" });
+  const hdr = { authorization: `Bearer ${signUser(admin.id)}`, "content-type": "application/json" };
+  const srv = (await db.select().from(schema.servers).where(eq(schema.servers.slug, "open-tag")))[0]!;
+
+  // throwaway workspace: server + #all channel + membership + one message + one message-scoped child row
+  const [tmp] = await db.insert(schema.servers).values({ name: `tmp-${suffix}`, slug: `tmp-${suffix}`, ownerId: admin.id }).returning();
+  const [ch] = await db.insert(schema.channels).values({ serverId: tmp!.id, name: "all", type: "channel" }).returning();
+  await db.insert(schema.serverMembers).values({ serverId: tmp!.id, userId: admin.id, role: "owner" });
+  await db.insert(schema.channelMembers).values({ channelId: ch!.id, memberType: "user", memberId: admin.id });
+  // seq: hand-picked out of Redis's range (same convention as conversationTurns.integration.test.ts)
+  const [msg] = await db.insert(schema.messages).values({ seq: 9_000_001, serverId: tmp!.id, channelId: ch!.id, senderType: "user", senderId: admin.id, senderName: admin.name, content: "hello tmp" }).returning();
+  await db.insert(schema.reactions).values({ messageId: msg!.id, memberType: "user", memberId: admin.id, emoji: "+1" }); // message-scoped child
+  // Fill EVERY remaining server-scoped table with real rows so the DELETE transaction is proven
+  // against each FK (an empty table can't surface a missed/out-of-order delete). Insertion order
+  // follows the FK dependency graph; the DELETE must clear all of these without a FK violation.
+  const [mach] = await db.insert(schema.machines).values({ serverId: tmp!.id, userId: admin.id, name: "m", apiKeyHash: "h", apiKeyPrefix: "sk_m" }).returning();
+  const [ag] = await db.insert(schema.agents).values({ serverId: tmp!.id, machineId: mach!.id, name: "bot", displayName: "bot" }).returning();
+  await db.insert(schema.channelMembers).values({ channelId: ch!.id, memberType: "agent", memberId: ag!.id });
+  const [turn] = await db.insert(schema.conversationTurns).values({ serverId: tmp!.id, channelId: ch!.id, senderType: "user", senderId: admin.id, anchorMessageId: msg!.id, triggerMessageId: msg!.id, latestMessageId: msg!.id, firstSeq: 1, lastSeq: 1, dispatchAfter: new Date(), causalRootId: randomUUID() }).returning();
+  await db.insert(schema.causalEdges).values({ serverId: tmp!.id, rootTurnId: turn!.id, parentTurnId: turn!.id, sourceAgentId: ag!.id, targetAgentId: ag!.id, depth: 1, outcome: "accepted" });
+  await db.insert(schema.messageMentions).values({ messageId: msg!.id, mentionType: "agent", mentionId: ag!.id, mentionName: "bot" });
+  await db.insert(schema.savedMessages).values({ serverId: tmp!.id, memberType: "user", memberId: admin.id, messageId: msg!.id });
+  await db.insert(schema.agentMessageDecisions).values({ messageId: msg!.id, agentId: ag!.id, serverId: tmp!.id, channelId: ch!.id });
+  await db.insert(schema.agentMessageObservations).values({ messageId: msg!.id, agentId: ag!.id, serverId: tmp!.id });
+  await db.insert(schema.agentActivityLog).values({ serverId: tmp!.id, agentId: ag!.id, ts: Date.now(), kind: "status", messageId: msg!.id, channelId: ch!.id });
+  const [att] = await db.insert(schema.attachments).values({ serverId: tmp!.id, messageId: msg!.id, channelId: ch!.id, filename: "f.txt", storageKey: "/tmp/f.txt" }).returning();
+  const [art] = await db.insert(schema.artifacts).values({ serverId: tmp!.id, channelId: ch!.id, name: "art", createdByType: "user", createdByUserId: admin.id }).returning();
+  await db.insert(schema.artifactVersions).values({ artifactId: art!.id, serverId: tmp!.id, channelId: ch!.id, version: 1, attachmentId: att!.id, createdByType: "user" });
+  await db.insert(schema.agentSessions).values({ serverId: tmp!.id, agentId: ag!.id, scopeType: "channel", scopeId: ch!.id });
+  await db.insert(schema.agentMemory).values({ serverId: tmp!.id, agentId: ag!.id, files: { "MEMORY.md": "x" }, memoryDigest: "a".repeat(64) });
+  await db.insert(schema.knowledge).values({ serverId: tmp!.id, createdByAgentId: ag!.id, title: "t", content: "c", searchText: "t c" });
+  await db.insert(schema.reminders).values({ serverId: tmp!.id, ownerType: "user", ownerId: admin.id, channelId: ch!.id, content: "r", remindAt: new Date() });
+  await db.insert(schema.serverSidebarPrefs).values({ serverId: tmp!.id, userId: admin.id, prefs: {} });
+  await db.insert(schema.joinLinks).values({ serverId: tmp!.id, token: `jl_${suffix}`, createdByUserId: admin.id });
+  await db.insert(schema.systemInvites).values({ email: `tmpin-${suffix}@t.local`, token: `invt_${suffix}`, serverId: tmp!.id });
+
+  const list: any = await (await api("/api/admin/servers", { headers: hdr })).json();
+  const tmpRow = list.servers.find((s: any) => s.id === tmp!.id);
+  assert.ok(tmpRow && tmpRow.memberCount === 1 && tmpRow.agentCount === 1);
+
+  assert.equal((await api(`/api/admin/servers/${tmp!.id}`, { method: "DELETE", headers: hdr })).status, 200);
+  assert.equal((await db.select().from(schema.servers).where(eq(schema.servers.id, tmp!.id))).length, 0);
+  assert.equal((await db.select().from(schema.channels).where(eq(schema.channels.serverId, tmp!.id))).length, 0);
+  assert.equal((await db.select().from(schema.messages).where(eq(schema.messages.serverId, tmp!.id))).length, 0);
+  assert.equal((await db.select().from(schema.reactions).where(eq(schema.reactions.messageId, msg!.id))).length, 0); // message-scoped child cleared
+  assert.equal((await db.select().from(schema.channelMembers).where(eq(schema.channelMembers.channelId, ch!.id))).length, 0); // channel-scoped child cleared
+  assert.equal((await db.select().from(schema.serverMembers).where(eq(schema.serverMembers.serverId, tmp!.id))).length, 0);
+  // every FK-bearing child table the workspace filled must be cleared (a miss would have 500'd the DELETE above)
+  const scopedTables: [string, { serverId: any }][] = [
+    ["machines", schema.machines], ["agents", schema.agents], ["conversation_turns", schema.conversationTurns],
+    ["causal_edges", schema.causalEdges], ["agent_sessions", schema.agentSessions], ["agent_memory", schema.agentMemory],
+    ["knowledge", schema.knowledge], ["reminders", schema.reminders], ["artifacts", schema.artifacts],
+    ["artifact_versions", schema.artifactVersions], ["attachments", schema.attachments], ["saved_messages", schema.savedMessages],
+    ["agent_message_decisions", schema.agentMessageDecisions], ["agent_message_observations", schema.agentMessageObservations],
+    ["agent_activity_log", schema.agentActivityLog], ["server_sidebar_prefs", schema.serverSidebarPrefs],
+    ["join_links", schema.joinLinks], ["system_invites", schema.systemInvites],
+  ];
+  for (const [name, t] of scopedTables) {
+    assert.equal((await db.select().from(t as any).where(eq(t.serverId, tmp!.id))).length, 0, `rows left in ${name}`);
+  }
+  assert.equal((await db.select().from(schema.messageMentions).where(eq(schema.messageMentions.messageId, msg!.id))).length, 0);
+  // member JWT still valid globally, but server-scoped API now 403 (gate 2 membership gone)
+  const scoped = await api("/api/channels", { headers: { authorization: `Bearer ${signUser(admin.id)}`, "x-server-id": tmp!.id } });
+  assert.equal(scoped.status, 403); // "not a member of this server"
+  // delete twice → 404
+  assert.equal((await api(`/api/admin/servers/${tmp!.id}`, { method: "DELETE", headers: hdr })).status, 404);
+
+  const stats: any = await (await api("/api/admin/stats", { headers: hdr })).json();
+  assert.ok(typeof stats.users.total === "number" && typeof stats.servers === "number" && typeof stats.agents.total === "number" && typeof stats.machines.online === "number");
+
+  // guarantee a fresh user.login row exists regardless of earlier tests (no order dependence)
+  assert.equal((await api("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: admin.email, password: "password-1" }) })).status, 200);
+  const logs: any = await (await api("/api/admin/audit-logs?event=server.deleted&limit=10", { headers: hdr })).json();
+  assert.ok(logs.logs.length >= 1 && logs.logs[0].event === "server.deleted");
+  // pagination: non-paged list has user.login events
+  const all: any = await (await api("/api/admin/audit-logs?limit=200", { headers: hdr })).json();
+  assert.ok(all.logs.some((l: any) => l.event === "user.login"));
+});

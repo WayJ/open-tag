@@ -2,7 +2,7 @@
 // inside requires systemRole === "system_admin"). Dispatched between gate 1 and gate 2 in index.ts.
 import type { UserCtx } from "./ctx.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { hashPassword, isValidEmail, newKey } from "../auth.js";
 import { isUuid, readJson, sendErr, sendJson } from "../util.js";
@@ -118,6 +118,100 @@ export async function handleAdminRoutes(ctx: UserCtx, systemRole: string | null)
       await logAudit("invite.revoked", { actorUserId: ctx.userId, metadata: { email: inv.email } });
       return (sendJson(ctx.res, 200, { ok: true }), true);
     }
+  }
+
+  if (ctx.p === "/api/admin/servers" && ctx.method === "GET") {
+    const srvs = await db.select().from(schema.servers);
+    const mems = await db.select({ serverId: schema.serverMembers.serverId }).from(schema.serverMembers);
+    const ags = await db.select({ serverId: schema.agents.serverId }).from(schema.agents).where(isNull(schema.agents.deletedAt));
+    const mc = new Map<string, number>(), ac = new Map<string, number>();
+    for (const m of mems) mc.set(m.serverId, (mc.get(m.serverId) ?? 0) + 1);
+    for (const a of ags) ac.set(a.serverId, (ac.get(a.serverId) ?? 0) + 1);
+    const owners = new Map((await db.select({ id: schema.users.id, name: schema.users.name }).from(schema.users)).map((u) => [u.id, u.name]));
+    return (sendJson(ctx.res, 200, { servers: srvs.map((s) => ({ id: s.id, name: s.name, slug: s.slug, ownerName: owners.get(s.ownerId) ?? null, memberCount: mc.get(s.id) ?? 0, agentCount: ac.get(s.id) ?? 0, createdAt: s.createdAt })) }), true);
+  }
+  {
+    const m = /^\/api\/admin\/servers\/([^/]+)$/.exec(ctx.p);
+    if (m && ctx.method === "DELETE") {
+      if (!isUuid(m[1]!)) return (sendErr(ctx.res, 404, "not found"), true);
+      const srv = (await db.select().from(schema.servers).where(eq(schema.servers.id, m[1]!)))[0];
+      if (!srv) return (sendErr(ctx.res, 404, "server not found"), true);
+      // Hard-delete every row the workspace owns, children before parents. Enumerated from src/db/schema.ts
+      // (FK graph audit 2026-09): most server-scoped tables carry a serverId column (deleted directly);
+      // channel-scoped (channel_members) and message-scoped (message_mentions, reactions) tables have no
+      // serverId and are cleared via inArray on this server's channel/message ids. Schema-level cascades
+      // exist on some FKs (conversation_turns/causal_edges/agent_message_observations) but only on those
+      // specific edges — nothing cascades off the servers row itself, so every table is cleared explicitly.
+      // agentActivityLog.serverId is a bare uuid (no FK) — still cleared by direct filter.
+      // audit_logs.targetServerId references servers (NO ACTION): older rows referencing this server are
+      // set to NULL (append-only history is kept; the row survives with its metadata).
+      // NOTE: no daemon/agent processes are killed here — their server row is gone, so agent auth and
+      // daemon reconnects against this server fail naturally on next use.
+      await db.transaction(async (tx) => {
+        const chanIds = (await tx.select({ id: schema.channels.id }).from(schema.channels).where(eq(schema.channels.serverId, srv.id))).map((r) => r.id);
+        const msgIds = (await tx.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.serverId, srv.id))).map((r) => r.id);
+        // message-scoped children (before messages)
+        if (msgIds.length) await tx.delete(schema.messageMentions).where(inArray(schema.messageMentions.messageId, msgIds));
+        if (msgIds.length) await tx.delete(schema.reactions).where(inArray(schema.reactions.messageId, msgIds));
+        // serverId-carrying children, dependents first
+        await tx.delete(schema.agentActivityLog).where(eq(schema.agentActivityLog.serverId, srv.id));
+        await tx.delete(schema.artifactVersions).where(eq(schema.artifactVersions.serverId, srv.id)); // before artifacts + attachments (attachmentId FK, no cascade)
+        await tx.delete(schema.agentMessageDecisions).where(eq(schema.agentMessageDecisions.serverId, srv.id));
+        await tx.delete(schema.agentMessageObservations).where(eq(schema.agentMessageObservations.serverId, srv.id));
+        await tx.delete(schema.savedMessages).where(eq(schema.savedMessages.serverId, srv.id));
+        await tx.delete(schema.attachments).where(eq(schema.attachments.serverId, srv.id)); // before messages (messageId FK)
+        await tx.delete(schema.messages).where(eq(schema.messages.serverId, srv.id));
+        await tx.delete(schema.causalEdges).where(eq(schema.causalEdges.serverId, srv.id)); // before turns + agents
+        await tx.delete(schema.conversationTurns).where(eq(schema.conversationTurns.serverId, srv.id));
+        await tx.delete(schema.knowledge).where(eq(schema.knowledge.serverId, srv.id)); // agentId FKs
+        await tx.delete(schema.agentSessions).where(eq(schema.agentSessions.serverId, srv.id)); // agentId + scopeId(channel) FKs
+        await tx.delete(schema.agentMemory).where(eq(schema.agentMemory.serverId, srv.id)); // agentId FK
+        await tx.delete(schema.artifacts).where(eq(schema.artifacts.serverId, srv.id)); // channelId + createdByAgentId FKs
+        await tx.delete(schema.reminders).where(eq(schema.reminders.serverId, srv.id)); // channelId FK
+        // channel-scoped children (before channels)
+        if (chanIds.length) await tx.delete(schema.channelMembers).where(inArray(schema.channelMembers.channelId, chanIds));
+        await tx.delete(schema.channels).where(eq(schema.channels.serverId, srv.id));
+        await tx.delete(schema.agents).where(eq(schema.agents.serverId, srv.id)); // before machines (machineId FK)
+        await tx.delete(schema.machines).where(eq(schema.machines.serverId, srv.id));
+        await tx.delete(schema.joinLinks).where(eq(schema.joinLinks.serverId, srv.id));
+        await tx.delete(schema.systemInvites).where(eq(schema.systemInvites.serverId, srv.id));
+        await tx.delete(schema.serverSidebarPrefs).where(eq(schema.serverSidebarPrefs.serverId, srv.id));
+        await tx.delete(schema.serverMembers).where(eq(schema.serverMembers.serverId, srv.id));
+        // keep audit history: detach this server from old audit rows instead of deleting them
+        await tx.update(schema.auditLogs).set({ targetServerId: null }).where(eq(schema.auditLogs.targetServerId, srv.id));
+        await tx.delete(schema.servers).where(eq(schema.servers.id, srv.id));
+      });
+      // targetServerId deliberately omitted: audit_logs.target_server_id has an FK to servers.id and the
+      // row is already gone — the id (plus name/slug) lives in metadata instead.
+      await logAudit("server.deleted", { actorUserId: ctx.userId, metadata: { serverId: srv.id, name: srv.name, slug: srv.slug } });
+      return (sendJson(ctx.res, 200, { ok: true }), true);
+    }
+  }
+
+  if (ctx.p === "/api/admin/stats" && ctx.method === "GET") {
+    const users = await db.select({ systemRole: schema.users.systemRole, disabledAt: schema.users.disabledAt }).from(schema.users);
+    const [serverCount] = await db.select({ serverCount: count() }).from(schema.servers);
+    const ags = await db.select({ activity: schema.agents.activity, deletedAt: schema.agents.deletedAt }).from(schema.agents);
+    const machs = await db.select({ status: schema.machines.status }).from(schema.machines);
+    return (sendJson(ctx.res, 200, {
+      users: { total: users.length, disabled: users.filter((u) => u.disabledAt).length, systemAdmins: users.filter((u) => u.systemRole === "system_admin").length },
+      servers: Number(serverCount?.serverCount ?? 0),
+      agents: { total: ags.filter((a) => !a.deletedAt).length, active: ags.filter((a) => !a.deletedAt && ["thinking", "working"].includes(a.activity ?? "")).length },
+      machines: { total: machs.length, online: machs.filter((x) => x.status === "online").length },
+    }), true);
+  }
+
+  if (ctx.p === "/api/admin/audit-logs" && ctx.method === "GET") {
+    const limit = Math.min(Math.max(Number(ctx.url.searchParams.get("limit") ?? 50), 1), 200);
+    const ev = ctx.url.searchParams.get("event");
+    const before = ctx.url.searchParams.get("before"); // createdAt ISO cursor
+    const conds: any[] = [];
+    if (ev) conds.push(eq(schema.auditLogs.event, ev));
+    if (before && !Number.isNaN(Date.parse(before))) conds.push(lt(schema.auditLogs.createdAt, new Date(before)));
+    const rows = await db.select().from(schema.auditLogs)
+      .where(conds.length ? and(...conds) : undefined)
+      .orderBy(desc(schema.auditLogs.createdAt)).limit(limit);
+    return (sendJson(ctx.res, 200, { logs: rows }), true);
   }
 
   // Prefix matched + guard passed but no route did: answer 404 here. Falling through to gate 2
