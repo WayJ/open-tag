@@ -85,6 +85,16 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // Register-mode gate (UX only): probe the deployment's registration state up front so a closed
+  // deployment shows a closed panel instead of a form that can only ever 403. The server-side 403
+  // on POST /api/auth/register remains the enforcement; a failed probe fails OPEN (form renders).
+  const [regOpen, setRegOpen] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (mode !== "register") return;
+    let cancelled = false;
+    fetch("/api/auth/config").then((r) => r.json()).then((d) => { if (!cancelled) setRegOpen(d?.openRegistration !== false); }).catch(() => { if (!cancelled) setRegOpen(true); });
+    return () => { cancelled = true; };
+  }, [mode]);
   const submit = async (e?: FormEvent<HTMLFormElement>) => {
     e?.preventDefault();
     if (busy) return;
@@ -97,6 +107,18 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       finishAuth(d.token, await workspaceHome(d.token));
     } catch (e: any) { setErr(String(e?.message || e)); } finally { setBusy(false); }
   };
+  const closedPanel = (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">open-tag</div>
+        <h1>{t("auth.registrationClosed")}</h1>
+        <p className="modal-note">{t("auth.registrationClosedDesc")}</p>
+        <div className="auth-alt"><a href="/login">{t("auth.toLogin")}</a></div>
+      </div>
+    </div>
+  );
+  if (mode === "register" && regOpen === false) return closedPanel;
+  if (mode === "register" && regOpen === null) return <div className="auth-page"><div className="auth-card">{t("auth.loading")}</div></div>; // config probe in flight
   return (
     <div className="auth-page">
       <div className="auth-card">
@@ -107,6 +129,74 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <button className="ok auth-submit" type="submit" disabled={busy}>{busy ? "…" : mode === "register" ? t("auth.register") : t("auth.login")}</button>
         </form>
         <div className="auth-alt">{mode === "register" ? <>{t("auth.hasAccount")}<a href="/login">{t("auth.login")}</a></> : <>{t("auth.noAccount")}<a href="/register">{t("auth.register")}</a></>}</div>
+      </div>
+    </div>
+  );
+}
+
+// System-invite landing page (/invite/:token): a system admin invited an email address to join a
+// workspace. Independent of StoreProvider bootstrap (mirrors JoinPage): the recipient sets a
+// username + password — the email is fixed by the invite and never re-typed — and accept-system-
+// invite creates the account, joins the workspace, and signs in. The token is single-use; every
+// dead-token case (never existed / revoked / expired / used) arrives as 410 with a code.
+export function SystemInvitePage() {
+  const { t } = useTranslation();
+  const { token } = useParams();
+  const [info, setInfo] = useState<any>(null);
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false; // token changed/unmounted mid-flight → drop the late response (same guard as the AuthPage config probe)
+    (async () => {
+      try { const d = await (await fetch(`/api/auth/system-invite-info?token=${encodeURIComponent(token || "")}`)).json(); if (!cancelled) setInfo(d); }
+      catch { if (!cancelled) setInfo({ valid: false }); }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+  const submit = async (e?: FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
+    if (busy) return;
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch("/api/auth/accept-system-invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, name, password }) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.token) throw new Error(authErrorMessage(t, d, t("auth.inviteFailed")));
+      finishAuth(d.token, await workspaceHome(d.token));
+    } catch (e: any) { setErr(String(e?.message || e)); } finally { setBusy(false); }
+  };
+  const describedBy = err ? "sysinvite-error" : undefined;
+  if (!info) return <div className="auth-page"><div className="auth-card">{t("auth.loading")}</div></div>;
+  if (!info.valid) return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">open-tag</div>
+        <h1>{t("auth.inviteInvalidTitle")}</h1>
+        <p className="modal-note">{t("auth.inviteInvalid")}</p>
+        <div className="auth-alt"><a href="/login">{t("auth.toLogin")}</a></div>
+      </div>
+    </div>
+  );
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">open-tag</div>
+        <h1>{t("auth.inviteTitle", { serverName: info.serverName })}</h1>
+        <p className="modal-note">{info.inviterName ? t("auth.invitedBy", { inviter: info.inviterName }) : t("auth.youAreInvited")}{t("auth.inviteIntro", { email: info.email, serverName: info.serverName, role: info.role })}</p>
+        <form className="auth-form" onSubmit={submit}>
+          <label className="auth-field" htmlFor="sysinvite-name">
+            <span>{t("auth.usernameLabel")}</span>
+            <input id="sysinvite-name" autoComplete="username" placeholder={t("auth.usernamePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} aria-describedby={describedBy} required />
+          </label>
+          <label className="auth-field" htmlFor="sysinvite-password">
+            <span>{t("auth.passwordLabel")}</span>
+            <input id="sysinvite-password" autoComplete="new-password" placeholder={t("auth.passwordPlaceholder")} type="password" value={password} onChange={(e) => setPassword(e.target.value)} aria-describedby={describedBy} required />
+          </label>
+          {err && <div id="sysinvite-error" className="form-err" role="alert" aria-live="polite">{err}</div>}
+          <button className="ok auth-submit" type="submit" disabled={busy}>{busy ? "…" : t("auth.inviteJoin")}</button>
+        </form>
+        <div className="auth-alt">{t("auth.hasAccount")}<a href="/login">{t("auth.login")}</a></div>
       </div>
     </div>
   );

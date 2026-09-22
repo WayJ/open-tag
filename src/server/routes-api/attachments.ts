@@ -3,7 +3,7 @@ import type { BaseCtx, ServerCtx } from "./ctx.js";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "../../db/index.js";
 import { parseUpload } from "../attachments.js";
-import { verifyUser } from "../auth.js";
+import { resolveActiveUser } from "../auth.js";
 import { can, requireCap } from "../capabilities.js";
 import { canUserReadChannel, canUserWriteChannel } from "../channelAccess.js";
 import { deleteObject, readObject } from "../storage.js";
@@ -122,7 +122,7 @@ export async function handlePublicAttachmentGet(ctx: BaseCtx): Promise<boolean> 
   // Attachment download/preview: browsers cannot set headers for anchor/img tags, so the token is passed as a query param (same approach as SSE). Placed before the auth check.
   const adl = /^\/api\/attachments\/([^/]+?)(\/preview)?$/.exec(p);
   if (adl && adl[1] !== "upload" && method === "GET") {
-    const uid = verifyUser(url.searchParams.get("token") ?? bearer(req));
+    const uid = (await resolveActiveUser(url.searchParams.get("token") ?? bearer(req)))?.id ?? null;
     if (!uid) return (sendErr(res, 401, "unauthorized"), true);
     if (!isUuid(adl[1]!)) return (sendErr(res, 404, "attachment not found"), true); // non-uuid would throw casting into the uuid column → 500
     const a = (await db.select().from(schema.attachments).where(eq(schema.attachments.id, adl[1]!)))[0];

@@ -19,6 +19,7 @@ import { shouldServeAppShell } from "./staticRoutes.js";
 import { serveDaemonBundle, serveDaemonInstallScript } from "./daemonBundle.js";
 import { dispatchConversationTurn } from "./core.js";
 import { startConversationTurnScheduler } from "./conversationTurns.js";
+import { promoteSystemAdminsFromEnv } from "./systemSettings.js";
 
 // ── Security headers (helmet) ────────────────────────────────────────────────
 // CSP, COEP, and CORP are disabled here: the Vite-built frontend uses inline
@@ -159,6 +160,9 @@ reconcileCounters()
   // a fresh server instance has zero daemons connected; they re-mark online on reconnect.
   .then(() => reconcileMachinesOnBoot().catch((e) => log.error("machine reconcile failed (continuing)", { detail: String(e?.message ?? e) })))
   .then(() => startConversationTurnScheduler(dispatchConversationTurn).catch((e) => log.error("conversation turn scheduler failed (continuing)", { detail: String(e?.message ?? e) })))
+  // SYSTEM_ADMIN_EMAILS boot promotion (legacy-deploy first-admin escape hatch): before listen so
+  // promoted admins are effective from the first request; non-fatal — the setting is advisory, not a gate.
+  .then(() => promoteSystemAdminsFromEnv().catch((e) => log.error("system-admin env promotion failed (continuing)", { detail: String(e?.message ?? e) })))
   .finally(() => server.listen(PORT, () => {
     log.info("control plane up", { url: `http://localhost:${PORT}`, logs: "~/.open-tag/logs/" });
     startMachineSweeper(); // backstop: offline machines whose daemon died without a clean WS close

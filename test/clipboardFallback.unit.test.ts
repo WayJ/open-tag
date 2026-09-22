@@ -10,10 +10,12 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const consumers = [
   "web/src/messageRender.tsx",
   "web/src/views/Chat.tsx",
-  "web/src/views/ConnectComputerWizard.tsx",
+  "web/src/views/CommandTabs.tsx",
   "web/src/views/Members.tsx",
   "web/src/views/misc.tsx",
 ];
+// Views that copy via an embedded CommandTabs instead of inline (8f63c68 extracted the copy UI).
+const embedders = ["web/src/views/ConnectComputerWizard.tsx", "web/src/views/misc.tsx"];
 
 test("copy actions share the LAN-compatible clipboard fallback", () => {
   for (const path of consumers) {
@@ -22,11 +24,15 @@ test("copy actions share the LAN-compatible clipboard fallback", () => {
     assert.match(source, /import \{ copyText \} from ["'][^"']*lib\/clipboard(?:\.ts)?["'];/, `${path} does not import the shared fallback`);
   }
 
-  const wizard = readFileSync(resolve(repo, "web/src/views/ConnectComputerWizard.tsx"), "utf8");
-  const copyAttempt = wizard.indexOf("if (!await copyText(text))");
-  const successFeedback = wizard.indexOf("setCopied(true)", copyAttempt);
-  assert.ok(copyAttempt >= 0 && successFeedback > copyAttempt, "wizard does not await the shared copy result");
-  assert.match(wizard.slice(copyAttempt, successFeedback), /window\.prompt[\s\S]*\breturn\b/, "wizard can report success after a failed copy");
+  for (const path of embedders) {
+    const source = readFileSync(resolve(repo, path), "utf8");
+    assert.match(source, /import \{ CommandTabs \} from ["'][^"']*CommandTabs(?:\.tsx)?["'];/, `${path} no longer embeds the shared command box`);
+  }
+  const cmdbox = readFileSync(resolve(repo, "web/src/views/CommandTabs.tsx"), "utf8");
+  const copyAttempt = cmdbox.indexOf("if (!await copyText(command))");
+  const successFeedback = cmdbox.indexOf("setCopied(true)", copyAttempt);
+  assert.ok(copyAttempt >= 0 && successFeedback > copyAttempt, "command box does not await the shared copy result");
+  assert.match(cmdbox.slice(copyAttempt, successFeedback), /window\.prompt[\s\S]*\breturn\b/, "command box can report success after a failed copy");
 });
 
 function installClipboardEnvironment({

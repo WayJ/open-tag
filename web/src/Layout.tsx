@@ -4,7 +4,7 @@ import { IconSearch, IconChat, IconTasks, IconUsers, IconMonitor, IconSettings, 
 import { useStore } from "./store.tsx";
 import { ServerSwitcher } from "./ServerSwitcher.tsx";
 import { QuickSwitcher } from "./QuickSwitcher.tsx";
-import { Menu, AlertTriangle } from "lucide-react";
+import { Menu, AlertTriangle, Shield } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSystemAlerts, NotificationCenter } from "./alerts.tsx";
 
@@ -23,7 +23,7 @@ export function Layout() {
   const loc = useLocation();
   const { server } = useParams();
   const nav = useNavigate();
-  const { unread } = useStore();
+  const { unread, me } = useStore();
   const { t } = useTranslation();
   const [showQS, setShowQS] = useState(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
@@ -71,6 +71,9 @@ export function Layout() {
             <span className="t-label" aria-hidden="true">{t("nav.alerts")}</span>
             <span className="rail-badge" aria-hidden="true">{alerts.length > 99 ? "99+" : alerts.length}</span>
           </a>
+        )}
+        {me?.systemRole === "system_admin" && (
+          <a className="t im" aria-label={t("admin.entry")} title={t("admin.entry")} onClick={() => nav("/admin")}><Shield size={19} /><span className="t-label" aria-hidden="true">{t("admin.entry")}</span></a>
         )}
         <a className={"t im" + (active("settings") ? " active" : "")} aria-label={t("nav.settings")} onClick={() => go("settings")}><IconSettings size={19} className="im-rotate" /><span className="t-label" aria-hidden="true">{t("nav.settings")}</span></a>
       </div>

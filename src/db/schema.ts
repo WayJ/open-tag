@@ -11,6 +11,8 @@ export const users = pgTable("users", {
   displayName: text("display_name").notNull(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash"),           // for local login (nullable in PoC)
+  systemRole: text("system_role"),                   // system_admin | null — deployment-wide admin (see docs/authorization.md); separate from server_members.role
+  disabledAt: timestamp("disabled_at", { withTimezone: true }), // non-null = disabled: blocks login + all API/WS via resolveActiveUser; data kept (soft-disable)
   gravatarHash: text("gravatar_hash"),
   avatarUrl: text("avatar_url"),
   description: text("description"),
@@ -457,3 +459,43 @@ export const joinLinks = pgTable("join_links", {
   expiresAt: timestamp("expires_at", { withTimezone: true }), // null = never expires
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({ byServer: index("join_links_server_idx").on(t.serverId) }));
+
+// ── System settings (KV, GET/PATCH /api/admin/settings) ──────
+// Deployment-wide settings, sysadmin-only. Single-row-per-key; an absent row means the code-side
+// built-in default applies (e.g. openRegistration=true) — nothing is seeded at install time.
+export const systemSettings = pgTable("system_settings", {
+  key: text("key").primaryKey(),                     // "openRegistration"
+  value: jsonb("value").notNull(),                   // {"enabled": true}
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ── System invites (admin-created account-creation links) ──────
+// Distinct from join_links: a join_link adds an EXISTING user to a workspace; a system_invite
+// CREATES the account (register-closed path). Revocation = hard delete; history lives in audit_logs.
+export const systemInvites = pgTable("system_invites", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: text("email").notNull(),
+  token: text("token").notNull().unique(),           // inv_-prefixed random string
+  serverId: uuid("server_id").notNull().references(() => servers.id), // workspace the new user joins
+  role: text("role").default("member").notNull(),    // server_members.role granted on accept
+  createdByUserId: uuid("created_by_user_id").references(() => users.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }), // default 7d at creation
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }), // null = pending
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  // one pending invite per email (partial unique; a re-invite after accept/revoke is allowed)
+  pendingEmailUniq: uniqueIndex("system_invites_pending_email_uidx").on(t.email).where(sql`${t.acceptedAt} is null`),
+}));
+
+// ── Audit log (GET /api/admin/audit-logs) ──────────
+// System-plane events only; append-only. metadata: ip / old→new values etc.
+export const auditLogs = pgTable("audit_logs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  event: text("event").notNull(),                    // user.registered | user.login | user.disabled | user.enabled | user.system_role_changed | user.password_reset | invite.created | invite.accepted | invite.revoked | settings.open_registration_changed | server.deleted
+  actorUserId: uuid("actor_user_id").references(() => users.id),
+  targetUserId: uuid("target_user_id").references(() => users.id),
+  targetServerId: uuid("target_server_id").references(() => servers.id),
+  metadata: jsonb("metadata").default({}).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({ byEvent: index("audit_logs_event_idx").on(t.event), byCreated: index("audit_logs_created_idx").on(t.createdAt) }));

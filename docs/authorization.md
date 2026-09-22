@@ -17,7 +17,7 @@ accepted by another — using the wrong plane's auth on a route is a security de
 
 | Plane | Who | Credential | Verified by | Endpoints |
 |---|---|---|---|---|
-| **human** | a person in a browser | JWT (`signUser`/`verifyUser`, 30-day) + `x-server-id` header | `auth.ts` `verifyUser` + the member gate in `routes-api.ts` | `/api/*` |
+| **human** | a person in a browser | JWT (`signUser`/`verifyUser`, 30-day) + `x-server-id` header | `auth.ts` `resolveActiveUser` (JWT verify → live user row → `disabledAt` rejected) + the member gate in `routes-api.ts` | `/api/*` |
 | **agent** | an AI agent process | per-agent token `sk_agent_*` + `x-agent-id` header | `auth.ts` `resolveAgent` (SHA-256 of token vs `agents.agentTokenHash`, bound to the agent id) | `/agent-api/*` |
 | **daemon** | a machine running agents | machine key (`sk_machine_*` or bootstrap key) in the WS query string | `ws.ts` handshake (`apiKeyHash` lookup; unknown key → close `4001`) | WS `/daemon/connect?key=` |
 
@@ -27,7 +27,8 @@ never in public channels (see `core-beliefs.md` §4).
 
 **Public (unauthenticated) endpoint inventory.** Outside the three planes, the server deliberately
 exposes a small no-auth surface, dispatched in `index.ts` before any gate: `GET /health` (liveness), the
-self-authenticating `/api/auth/*` endpoints (register/login/dev-login/invite-info/accept-invite/setup —
+self-authenticating `/api/auth/*` endpoints (register/login/dev-login/invite-info/accept-invite/setup,
+plus the UX-only `GET /api/auth/config` registration-state probe —
 gate 0 in `routes-api/index.ts`), and the daemon-distribution surface served by `src/server/daemonBundle.ts`:
 `GET/HEAD /daemon/cli.mjs` + `GET /daemon/agent-cli.mjs` (`no-cache`) serve the self-contained daemon
 bundles — public at the same trust level as the public npm package because **the bundles embed no
@@ -60,13 +61,54 @@ no inheritance, no wildcards.
   `if (!await requireCap(serverId, userId, "manageX")) return (sendErr(res, 403, "need manageX capability"), true);`
 
 **Enforcement order on a server-scoped route:**
-1. `verifyUser(bearer)` → `userId` (else 401).
+1. `resolveActiveUser(bearer)` → live, non-disabled `userId` (else 401) — flipping `users.disabledAt`
+   revokes already-issued 30-day JWTs at every REST / socket.io-handshake / public-attachment gate.
 2. `serverId = serverIdHeader(req)` (the `x-server-id` header — client-supplied, trusted *only* after step 3).
 3. **Member gate** (`routes-api.ts`): `serverMembers WHERE serverId AND userId` — else `403 not a member`.
 4. **Capability gate** (for privileged mutations): `requireCap(serverId, userId, cap)`.
 5. **Resource gate** (for `:id` resources): the query's `WHERE` must also pin `serverId` / membership / ownership (§4).
 
 Steps 1–3 are universal. **Steps 4–5 are per-endpoint and are exactly where gaps live (§6).**
+
+**System plane (`systemRole` + `/api/admin/*`, gate 1.5).** Deployment-wide, orthogonal to workspace
+roles: `users.systemRole = "system_admin"` gates every `/api/admin/*` route (dispatched in
+`routes-api/index.ts` after gate 1, before the server-scope gate, no `x-server-id` needed; non-admins →
+`403 system admin required`). First admins come from the seed (owner marked `system_admin`), the
+empty-users-table register bootstrap, or `SYSTEM_ADMIN_EMAILS` at boot. `users.disabledAt` (soft-disable)
+is enforced centrally in `resolveActiveUser`; login additionally returns `403 auth_account_disabled`.
+Registration is gated by the `openRegistration` system setting: `POST /api/auth/register` →
+`403 auth_registration_closed` when closed (`GET /api/auth/config` is the public UX probe, not
+enforcement); admin changes go through `GET/PATCH /api/admin/settings` and are audit-logged
+(`audit.ts` → `auditLogs`).
+
+System-admin surface (all gate 1.5, all audit-logged):
+- **Users** — `GET /api/admin/users` (list + `q` filter + workspaceCount), `PATCH /api/admin/users/:id`
+  (`disabled` / `systemRole`; self-guards: cannot disable or demote yourself → 400),
+  `POST /api/admin/users/:id/reset-password` (returns a one-time temp password; the old one is destroyed).
+- **Account invites** (the register-closed path) — admin `GET/POST /api/admin/invites` +
+  `DELETE /api/admin/invites/:id` (revocation = hard delete; re-invite after accept/revoke allowed,
+  after expiry the stale row is replaced). Public `GET /api/auth/system-invite-info?token=` — email
+  **masked** via `maskEmail` (a leaked token must not recover the address); no rate limit, same
+  convention as `invite-info`/`config`. `POST /api/auth/accept-system-invite` (rate-limited
+  10/min/IP) creates the account,
+  joins the target workspace with the granted role, auto-joins `#all`, and signs the user in. Any
+  non-usable token (never existed / revoked / expired / used) → `410 invite_<status>`; duplicate
+  pending invite per email → 409.
+- **Workspaces** — `GET /api/admin/servers` (per-server member/agent counts + owner name),
+  `DELETE /api/admin/servers/:id` (hard-cascade: one tx clears every server-scoped table
+  children-first; members of the deleted workspace lose gate-2 access immediately — a still-valid
+  JWT now gets `403 not a member of this server`; daemon/agent processes are not killed, their auth
+  fails naturally once the server row is gone). Non-uuid or unknown id → 404. Audit-logged as
+  `server.deleted` (the id lives in metadata — `audit_logs.targetServerId` cannot reference a
+  deleted row, and pre-existing audit rows referencing the workspace have their `targetServerId`
+  nulled, keeping the append-only history).
+- **Stats** — `GET /api/admin/stats` (users total/disabled/systemAdmins, servers, agents
+  total/active, machines total/online). Read-only, counts only.
+- **Audit logs** — `GET /api/admin/audit-logs` (`event` exact filter, `before` = createdAt-ISO
+  cursor, newest-first, limit clamped 1-200). Read-only; the audit trail itself is append-only —
+  the only mutation anywhere is the server-delete nulling described above.
+- Unmatched `/api/admin/*` path (guard passed) → 404 inside the handler, never the gate-2
+  `x-server-id` 400.
 
 ## 3. Agent plane: scope model (`scopes.ts`) + the resource gap
 
