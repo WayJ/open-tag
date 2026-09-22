@@ -11,7 +11,7 @@ export interface Agent { id: string; name: string; displayName: string; descript
 export interface Machine { id: string; name?: string; hostname?: string; os?: string; runtimes?: string[]; status?: string; daemonVersion?: string; isComputer?: boolean; apiKeyPrefix?: string }
 export interface Human { userId: string; name: string; displayName?: string; role?: string; description?: string; avatarUrl?: string | null }
 export interface ServerInfo { id: string; name: string; slug: string; avatarUrl?: string | null; role?: string; capabilities?: Record<string, boolean> }
-export interface Me { id: string; name: string; displayName?: string }
+export interface Me { id: string; name: string; displayName?: string; systemRole?: string | null } // systemRole: "system_admin" | null — drives the /admin route gate + rail entry (bootstrap /api/auth/me already returns it)
 export interface Att { id: string; filename: string; mimeType?: string; sizeBytes?: number; artifactName?: string; artifactVersion?: number; artifactDescription?: string | null }
 export interface Reaction { emoji: string; count: number; reactorIds: string[]; reactorNames: string[] }
 export interface ActionMeta { kind: string; state: "prepared" | "executed"; action: { type: string; name: string; description?: string | null; visibility?: string; initialHumans?: string[]; initialAgents?: string[]; requiredComputer?: string | null; suggestedComputer?: string | null }; executedByUserName?: string | null; result?: { kind: string; id: string; name: string } | null }

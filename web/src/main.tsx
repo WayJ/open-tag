@@ -10,7 +10,9 @@ import { Chat } from "./views/Chat.tsx";
 import { Showcase } from "./views/Showcase.tsx";
 import { Members } from "./views/Members.tsx";
 import { Tasks, Computers, Search, Settings, Inbox, Saved } from "./views/misc.tsx";
-import { AuthPage, JoinPage } from "./views/Auth.tsx";
+import { AuthPage, JoinPage, SystemInvitePage } from "./views/Auth.tsx";
+import { Admin } from "./views/Admin.tsx";
+import { adminRouteDecision } from "./views/adminGuard.ts";
 import { Landing } from "./views/Landing.tsx";
 import { Features } from "./views/Features.tsx";
 import { homeRoute } from "./routing.ts";
@@ -60,6 +62,20 @@ function WorkspaceRoute() {
   return <Layout />;
 }
 
+// System-admin route guard for /admin/*: wait on the bootstrap (skeleton — never flash the console or
+// redirect prematurely), hard-gate on auth (login), and bounce a non-sysadmin authed user back to
+// their workspace. The decision itself is pure + unit-tested in adminGuard.ts.
+function AdminRoute() {
+  const { slug, ready, authState, me } = useStore();
+  const loc = useLocation();
+  switch (adminRouteDecision({ ready, authState, systemRole: me?.systemRole ?? null })) {
+    case "skeleton": return <WorkspaceSkeleton />;
+    case "login": return <Navigate to="/login" replace />;
+    case "workspace": return <Navigate to={`/s/${slug}/channel${loc.search}`} replace />;
+    default: return <Admin />;
+  }
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <StoreProvider>
@@ -72,6 +88,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="/login" element={<AuthPage mode="login" />} />
           <Route path="/register" element={<AuthPage mode="register" />} />
           <Route path="/join/:token" element={<JoinPage />} />
+          <Route path="/invite/:token" element={<SystemInvitePage />} />
+          <Route path="/admin" element={<AdminRoute />} />
+          <Route path="/admin/:section" element={<AdminRoute />} />
           <Route path="/s/:server" element={<WorkspaceRoute />}>
             <Route index element={<Navigate to="channel" replace />} />
             <Route path="inbox" element={<Inbox />} />

@@ -112,6 +112,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   );
 }
 
+// Placeholder — the system-invite landing page (/invite/:token) lands in a later commit.
+export function SystemInvitePage() {
+  return null;
+}
+
 export function JoinPage() {
   const { t } = useTranslation();
   const { token } = useParams();
