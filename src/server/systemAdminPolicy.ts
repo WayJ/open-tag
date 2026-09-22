@@ -11,16 +11,17 @@ export function registrationDecision(userCount: number, openRegistration: boolea
   return openRegistration ? "allow" : "reject";
 }
 
-/** Mask an email for public invite-info: keep first+last local char and first domain char + TLD. */
+/** Mask an email for public invite-info: keep first+last local char and first domain char + TLD.
+ *  Short parts still never return plaintext — they degrade to a minimal first-char-only mask. */
 export function maskEmail(email: string): string {
   const at = email.indexOf("@");
-  if (at < 2) return email; // too short to mask meaningfully
+  if (at < 1) return email; // no local part to mask — malformed, leave as-is
   const [local, domain] = [email.slice(0, at), email.slice(at + 1)];
   const dot = domain.lastIndexOf(".");
   if (dot < 1 || dot + 2 > domain.length) return email; // no sane TLD split — leave as-is
   const tld = domain.slice(dot);
   const domHead = domain.slice(0, dot);
-  if (local.length < 3 || domHead.length < 2) return email;
+  if (local.length < 3 || domHead.length < 2) return `${local[0]}***@${domHead[0]}***${tld}`;
   return `${local[0]}***${local[local.length - 1]}@${domHead[0]}***${tld}`;
 }
 
@@ -31,6 +32,9 @@ export function inviteStatus(
 ): InviteStatus {
   if (!invite) return "not_found";
   if (invite.acceptedAt != null) return "used";
-  if (invite.expiresAt != null && new Date(invite.expiresAt as any).getTime() < now) return "expired";
+  if (invite.expiresAt != null) {
+    const expires = invite.expiresAt instanceof Date ? invite.expiresAt.getTime() : Date.parse(invite.expiresAt);
+    if (expires < now) return "expired";
+  }
   return "valid";
 }

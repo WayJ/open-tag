@@ -461,7 +461,8 @@ export const joinLinks = pgTable("join_links", {
 }, (t) => ({ byServer: index("join_links_server_idx").on(t.serverId) }));
 
 // ── System settings (KV, GET/PATCH /api/admin/settings) ──────
-// Deployment-wide settings, sysadmin-only. Single-row-per-key; seeded with openRegistration=true.
+// Deployment-wide settings, sysadmin-only. Single-row-per-key; an absent row means the code-side
+// built-in default applies (e.g. openRegistration=true) — nothing is seeded at install time.
 export const systemSettings = pgTable("system_settings", {
   key: text("key").primaryKey(),                     // "openRegistration"
   value: jsonb("value").notNull(),                   // {"enabled": true}
@@ -484,7 +485,7 @@ export const systemInvites = pgTable("system_invites", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   // one pending invite per email (partial unique; a re-invite after accept/revoke is allowed)
-  pendingEmailUniq: uniqueIndex("system_invites_pending_email_uidx").on(t.email).where(sql`accepted_at is null`),
+  pendingEmailUniq: uniqueIndex("system_invites_pending_email_uidx").on(t.email).where(sql`${t.acceptedAt} is null`),
 }));
 
 // ── Audit log (GET /api/admin/audit-logs) ──────────
