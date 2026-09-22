@@ -20,22 +20,22 @@
 - 测试惯例：`npx tsx --test --test-force-exit test/<file>`，node:test + assert/strict；`test/daemonConnectCommand.unit.test.ts`、`test/machineUpdateGuide.unit.test.ts` 覆盖现命令。
 - **不改 `src/daemon/**`** → 无需 daemon 发版。无 DB schema 变更 → 无迁移。
 
-## 命令形态（已与用户确认；2026-09-22 修订：两件套分发）
+## 命令形态（已与用户确认；2026-09-22 修订 v2：安装脚本端点）
 
-- 平台一键命令（bash / PowerShell 两 tab），更新弹窗一并切换。
-- **修订原因**：bundled daemon 在运行时找同目录 sibling `agent-cli.mjs` 作 agent 侧 CLI（src/daemon/openTagBin.ts:15-24）。只发 `cli.mjs` 会让目标机回退 repo 模式（npx tsx，无仓库）→ agent CLI 坏。故两个 bundle 都要下载到同一目录。
+- **v2 修订原因**：v1 双 bundle 一键命令（mkdir + 2×curl + node）太长。server 生成安装脚本，命令缩成 pipe 风格（rustup/homebrew 同款）。（v2 landed: commit `c8e6f6c`）
+- **v1 遗留原因（仍成立）**：bundled daemon 找同目录 sibling `agent-cli.mjs`（openTagBin.ts:15-24）→ 安装脚本必须把两个 bundle 放同一稳定目录。
 - bash（macOS/Linux/Git Bash）：
   ```
-  mkdir -p /tmp/open-tag && curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag/cli.mjs && curl -fsSL {origin}/daemon/agent-cli.mjs -o /tmp/open-tag/agent-cli.mjs && node /tmp/open-tag/cli.mjs --server-url {origin} --api-key {key}
+  curl -fsSL "{origin}/daemon/install.sh?server={origin}&key={key}" | bash
   ```
 - PowerShell（Windows）：
   ```
-  New-Item -Force -ItemType Directory $env:TEMP\open-tag | Out-Null; Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\open-tag\cli.mjs; Invoke-WebRequest -Uri {origin}/daemon/agent-cli.mjs -OutFile $env:TEMP\open-tag\agent-cli.mjs; node "$env:TEMP\open-tag\cli.mjs" --server-url {origin} --api-key {key}
+  iwr -useb "{origin}/daemon/install.ps1?server={origin}&key={key}" | iex
   ```
-- server 端点：`GET /daemon/cli.mjs` + `GET /daemon/agent-cli.mjs`；`daemonBundleAvailable` = 两文件都在。
-- 端点公开无鉴权（bundle 无密钥，信任级别同 npm 公开包），`Cache-Control: no-cache`。
+- server 端点：`GET /daemon/install.sh` / `GET /daemon/install.ps1`（公开，`Cache-Control: no-store`；按查询参数 `server`/`key` 生成脚本，值内嵌 + 正确引号转义；缺参数 → 400）。脚本逻辑：建稳定目录 `~/.open-tag/daemon` → 下载 cli.mjs + agent-cli.mjs 到该目录（失败即退非零）→ 启动 daemon（sh `exec node`，PS `& node`）。bundle 端点 `/daemon/cli.mjs` + `/daemon/agent-cli.mjs` 保留（脚本内部使用）。更新流程 = 同一条命令（重下载 + 需先停旧 daemon，弹窗文案已覆盖）。`daemonBundleAvailable` = 两 bundle 都在。
+- key 出现在 URL 查询串：与 UI 明文展示同级暴露面；`no-store` 降低代理/日志残留。自托管场景接受。
+- 端点公开无鉴权（bundle 无密钥，信任级别同 npm 公开包）。
 - 目标机器仍需 node20+（与 npx 相同前提）。
-- 已落地（landed: commit 76bbd06）：server 双端点 + `daemonBundleExists` 双文件语义 + web 两件套下载命令；17/17 单测绿、typecheck 绿。
 
 ---
 
@@ -141,7 +141,7 @@ if ((method === "GET" || method === "HEAD") && url.pathname === "/daemon/cli.mjs
 - Modify: `test/daemonConnectCommand.unit.test.ts`（先改测试）
 - Modify: `test/machineUpdateGuide.unit.test.ts`（先改测试）
 
-- [ ] Step 1: 重写两个测试文件为失败状态。新 API：
+- [x] Step 1: 重写两个测试文件为失败状态。新 API：
 
 ```ts
 export type DaemonCommandSet = { kind: "custom"; command: string } | { kind: "platform"; bash: string; powershell: string };
@@ -155,13 +155,13 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
   3. template 提供时无论 flag → `kind: "custom"`，占位符渲染（连接=真 key，更新=`<your sk_machine_... key>`）。
   4. 更新命令：`kind: "platform"` 时 bash/powershell 内 key 位置为 `KEY_PLACEHOLDER`。
 
-- [ ] Step 2: 跑两测试确认失败
-- [ ] Step 3: 实现 machineUi.ts：
+- [x] Step 2: 跑两测试确认失败
+- [x] Step 3: 实现 machineUi.ts：
   - 保留 `DEFAULT_DAEMON_COMMAND`（改注释：现为回退）、`KEY_PLACEHOLDER`、`renderDaemonCommand`。
   - 新增两模板常量 `BUNDLE_CMD_BASH` / `BUNDLE_CMD_POWERSHELL`（见上文"命令形态"）。
   - 新函数 `daemonConnectCommands` / `daemonUpdateCommands`（逻辑：template 优先 → custom；bundleAvailable → platform 渲染两模板；否则 custom=npx 渲染）。删除旧 `daemonConnectCommand` / `daemonUpdateCommandTemplate`（调用方仅 wizard + modal + 测试，一并改）。
-- [ ] Step 4: 跑两测试确认通过
-- [ ] Step 5: Commit `feat(web): platform daemon commands (server-distributed bundle) with npx fallback`
+- [x] Step 4: 跑两测试确认通过
+- [x] Step 5: Commit `feat(web): platform daemon commands (server-distributed bundle) with npx fallback`
 
 ### Task 3: UI — 平台 tab 命令框 + store 标志
 
@@ -172,13 +172,29 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
 - Modify: `web/src/views/misc.tsx:281-283,298-299`（DaemonUpdateModal）
 - Modify: `web/src/locales/en.json`、`zh.json`（tab 标签 `misc.cmdTabBash`="bash / Linux / macOS"、`misc.cmdTabPowershell`="PowerShell / Windows"；修正 :310 附近硬编码 npx 提示文案）
 
-- [ ] Step 1: `CommandTabs.tsx`：props `{ set: DaemonCommandSet }`。`kind: "custom"` → 渲染现单 codebox（复用现有 `.codebox` 结构 + copy 按钮）；`kind: "platform"` → 两 tab（默认按 `navigator.userAgent.includes("Windows")` 选 powershell 否则 bash），codebox 内容随 tab。copy 逻辑复用 `copyText`（`web/src/lib/clipboard.ts`），参考 wizard :102-105。
-- [ ] Step 2: store 挂 `daemonBundleAvailable` —— machines 响应解析有**两处**：reload `:149` 与 socket `machine:status` 重拉 `:393`，两处都 set 该字段。
-- [ ] Step 3: wizard `:101` 改 `daemonConnectCommands(window.location.origin, res.key, { template: daemonCommandTemplate, bundleAvailable: daemonBundleAvailable })`，codebox 区换 `<CommandTabs set={...} />`。
-- [ ] Step 4: DaemonUpdateModal 同改（`daemonUpdateCommands` + `<CommandTabs />`）。
-- [ ] Step 5: locales 两语言补键、改 npx 提示。
-- [ ] Step 6: root `npm run typecheck` 通过（已含 web tsconfig；web/package.json 无独立 typecheck 脚本）
-- [ ] Step 7: Commit `feat(web): platform-tab command box in connect wizard + daemon update modal`
+- [x] Step 1: `CommandTabs.tsx`：props `{ set: DaemonCommandSet }`。`kind: "custom"` → 渲染现单 codebox（复用现有 `.codebox` 结构 + copy 按钮）；`kind: "platform"` → 两 tab（默认按 `navigator.userAgent.includes("Windows")` 选 powershell 否则 bash），codebox 内容随 tab。copy 逻辑复用 `copyText`（`web/src/lib/clipboard.ts`），参考 wizard :102-105。
+- [x] Step 2: store 挂 `daemonBundleAvailable` —— machines 响应解析有**两处**：reload `:149` 与 socket `machine:status` 重拉 `:393`，两处都 set 该字段。
+- [x] Step 3: wizard `:101` 改 `daemonConnectCommands(window.location.origin, res.key, { template: daemonCommandTemplate, bundleAvailable: daemonBundleAvailable })`，codebox 区换 `<CommandTabs set={...} />`。
+- [x] Step 4: DaemonUpdateModal 同改（`daemonUpdateCommands` + `<CommandTabs />`）。
+- [x] Step 5: locales 两语言补键、改 npx 提示。
+- [x] Step 6: root `npm run typecheck` 通过（已含 web tsconfig；web/package.json 无独立 typecheck 脚本）
+- [x] Step 7: Commit `feat(web): platform-tab command box in connect wizard + daemon update modal`
+
+### Task 2.6: 安装脚本端点 + 命令简化（v2 修订，替代 v1 长命令）
+
+**Files:**
+- Modify: `src/server/daemonBundle.ts`（新增 `installSh(origin, key)` / `installPs1(origin, key)` 生成函数 + 两个端点 handler；sh 单引号转义、PS 单引号转义；缺 server/key 参数 → 400）
+- Modify: `src/server/index.ts`（dispatch 加 `/daemon/install.sh`、`/daemon/install.ps1`，GET，`no-store`）
+- Modify: `test/daemonBundle.unit.test.ts`（脚本生成：参数嵌入、转义——`'`/`"`/空格注入样例、400 分支）
+- Modify: `web/src/machineUi.ts`（`BUNDLE_CMD_*` 换成 v2 短命令）
+- Modify: `test/daemonConnectCommand.unit.test.ts`、`test/machineUpdateGuide.unit.test.ts`（全串断言同步）
+
+- [x] Step 1: RED — 测试先行（脚本生成纯函数 + 命令字符串）
+- [x] Step 2: GREEN — 实现生成函数 + 端点 + 命令常量
+- [x] Step 3: 三测试文件全绿 + `npm run typecheck`
+- [x] Step 4: Commit `feat: server-generated install scripts (install.sh/ps1) shorten connect command to one pipe`
+
+（流程裁剪：Task 2.3/2.5/2.6 合并为 Task 6 前一次综合 review，不再每任务两轮。）
 
 ### Task 4: 构建/部署管线带上 bundle
 
@@ -220,7 +236,7 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
 
 ## 边界与不做（YAGNI）
 
-- 不做安装脚本端点（install.sh/ps1）——平台一键命令已覆盖。
+- ~~不做安装脚本端点~~ v2 已推翻：安装脚本端点是命令简化的核心手段。
 - 不做版本查询参数/长缓存 —— `no-cache` 足够（一次性下载）。
 - 不做 cmd.exe 第三 tab —— Windows 走 PowerShell tab。
 - 不动 `src/daemon/**` → 不触发 daemon 发版流程。
