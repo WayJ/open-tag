@@ -81,6 +81,21 @@ Registration is gated by the `openRegistration` system setting: `POST /api/auth/
 enforcement); admin changes go through `GET/PATCH /api/admin/settings` and are audit-logged
 (`audit.ts` → `auditLogs`).
 
+System-admin surface (all gate 1.5, all audit-logged):
+- **Users** — `GET /api/admin/users` (list + `q` filter + workspaceCount), `PATCH /api/admin/users/:id`
+  (`disabled` / `systemRole`; self-guards: cannot disable or demote yourself → 400),
+  `POST /api/admin/users/:id/reset-password` (returns a one-time temp password; the old one is destroyed).
+- **Account invites** (the register-closed path) — admin `GET/POST /api/admin/invites` +
+  `DELETE /api/admin/invites/:id` (revocation = hard delete; re-invite after accept/revoke allowed,
+  after expiry the stale row is replaced). Public, rate-limited (10/min/IP):
+  `GET /api/auth/system-invite-info?token=` (email **masked** via `maskEmail` — a leaked token must
+  not recover the address) and `POST /api/auth/accept-system-invite`, which creates the account,
+  joins the target workspace with the granted role, auto-joins `#all`, and signs the user in. Any
+  non-usable token (never existed / revoked / expired / used) → `410 invite_<status>`; duplicate
+  pending invite per email → 409.
+- Unmatched `/api/admin/*` path (guard passed) → 404 inside the handler, never the gate-2
+  `x-server-id` 400.
+
 ## 3. Agent plane: scope model (`scopes.ts`) + the resource gap
 
 `resolveAgent` binds a token to one agent row, from which `serverId` is read directly (never from a
