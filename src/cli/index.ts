@@ -7,6 +7,7 @@ import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createLogger } from "../log.js";
 import { mimeFor } from "./mime.js";
+import { attachmentIdsFrom } from "./attach.js";
 
 const log = createLogger("cli");
 const BASE = process.env.OPEN_TAG_SERVER_URL ?? "http://localhost:7777";
@@ -95,10 +96,10 @@ message.command("decide").description("record whether and why this agent should 
     await recordTurnEvent({ type: "decision", messageId: d.messageId, decision: d.decision, grant: d.grant });
     console.log(`Decision ${d.decision} for ${String(d.messageId).slice(0, 8)}; grant=${d.grant ?? "none"}${d.promotedAgentId ? `; promoted=${String(d.promotedAgentId).slice(0, 8)}` : ""}`);
   });
-message.command("send").description("send a granted reply (body read from stdin); if newer messages arrived it is freshness-held as a draft").requiredOption("--target <target>", "#channel / dm:@name / #channel:shortid / thread:shortid").option("--reply-to <id>", "trigger message full/short id").option("--attach <ids>", "attachment ids, comma-separated").option("--send-draft", "submit the held draft as-is after reply authorization").action(async (opts) => {
+message.command("send").description("send a granted reply (body read from stdin); if newer messages arrived it is freshness-held as a draft").requiredOption("--target <target>", "#channel / dm:@name / #channel:shortid / thread:shortid").option("--reply-to <id>", "trigger message full/short id").option("--attach <ids...>", "attachment ids, repeat the flag or comma-separate").option("--send-draft", "submit the held draft as-is after reply authorization").action(async (opts) => {
   const sendDraft = !!opts.sendDraft;
   const content = sendDraft ? "" : (await readStdin()).trim();
-  const attachmentIds = opts.attach ? String(opts.attach).split(",").map((s: string) => s.trim()).filter(Boolean) : [];
+  const attachmentIds = attachmentIdsFrom(opts.attach); // variadic option yields string[]; helper also accepts the pre-variadic single-string shape
   if (!sendDraft && !content && !attachmentIds.length) { console.error("Error: empty content"); console.error("Next action: pipe body via heredoc on stdin, or use --attach to include attachments"); process.exit(1); }
   const d = await api("POST", "/agent-api/message/send", { target: opts.target, content, attachmentIds, sendDraft, replyTo: opts.replyTo });
   if (d.held) { await recordTurnEvent({ type: "held", target: opts.target }); return console.log(d.text); } // freshness-hold: prints bounded context + two options, letting the agent revise or use --send-draft
