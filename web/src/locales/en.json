@@ -605,6 +605,58 @@
       "regOpenMsg": "Anyone will be able to sign up on their own.",
       "regCloseMsg": "Only system-admin invites will create accounts.",
       "regHint": "With registration closed, new users are created from the Invites tab."
+    },
+    "invites": {
+      "email": "Invitee email",
+      "pickWorkspace": "Pick a workspace…",
+      "roleMember": "Member",
+      "roleAdmin": "Admin",
+      "expires": "Expires (days, 1-90)",
+      "create": "Create invite",
+      "creating": "Creating…",
+      "createdTitle": "Invite created",
+      "createdNote": "Send the link to the invitee — they open it, set a username and password, and land in the target workspace. The link works until it expires or is accepted.",
+      "linkLabel": "Invite link",
+      "copy": "Copy",
+      "copied": "Copied",
+      "listEmpty": "No invites yet.",
+      "createdAt": "created",
+      "expiresAt": "expires",
+      "status": {
+        "pending": "pending",
+        "accepted": "accepted",
+        "expired": "expired"
+      },
+      "revoke": "Revoke",
+      "revokeConfirm": "Revoke the invite for {{email}}?",
+      "revokeMessage": "The invite link stops working immediately."
+    },
+    "workspaces": {
+      "statsUsers": "Users",
+      "statsServers": "Workspaces",
+      "statsAgents": "Agents (active/total)",
+      "statsMachines": "Machines (online/total)",
+      "disabledCount": "{{count}} disabled",
+      "name": "Name",
+      "slug": "Slug",
+      "owner": "Owner",
+      "members": "Members",
+      "agents": "Agents",
+      "created": "Created",
+      "delete": "Delete",
+      "deleteConfirm": "Delete workspace \"{{name}}\"?",
+      "deleteMessage": "Every channel, message, agent, and machine record it owns is permanently deleted. This cannot be undone.",
+      "empty": "No workspaces"
+    },
+    "audit": {
+      "allEvents": "All events",
+      "time": "Time",
+      "event": "Event",
+      "actor": "Actor",
+      "target": "Target",
+      "metadata": "Details",
+      "loadMore": "Load more",
+      "empty": "No audit logs yet"
     }
   },
   "qs": {
