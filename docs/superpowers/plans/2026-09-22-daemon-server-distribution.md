@@ -20,19 +20,22 @@
 - 测试惯例：`npx tsx --test --test-force-exit test/<file>`，node:test + assert/strict；`test/daemonConnectCommand.unit.test.ts`、`test/machineUpdateGuide.unit.test.ts` 覆盖现命令。
 - **不改 `src/daemon/**`** → 无需 daemon 发版。无 DB schema 变更 → 无迁移。
 
-## 命令形态（已与用户确认）
+## 命令形态（已与用户确认；2026-09-22 修订：两件套分发）
 
 - 平台一键命令（bash / PowerShell 两 tab），更新弹窗一并切换。
+- **修订原因**：bundled daemon 在运行时找同目录 sibling `agent-cli.mjs` 作 agent 侧 CLI（src/daemon/openTagBin.ts:15-24）。只发 `cli.mjs` 会让目标机回退 repo 模式（npx tsx，无仓库）→ agent CLI 坏。故两个 bundle 都要下载到同一目录。
 - bash（macOS/Linux/Git Bash）：
   ```
-  curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag-daemon.mjs && node /tmp/open-tag-daemon.mjs --server-url {origin} --api-key {key}
+  mkdir -p /tmp/open-tag && curl -fsSL {origin}/daemon/cli.mjs -o /tmp/open-tag/cli.mjs && curl -fsSL {origin}/daemon/agent-cli.mjs -o /tmp/open-tag/agent-cli.mjs && node /tmp/open-tag/cli.mjs --server-url {origin} --api-key {key}
   ```
 - PowerShell（Windows）：
   ```
-  Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\open-tag-daemon.mjs; node "$env:TEMP\open-tag-daemon.mjs" --server-url {origin} --api-key {key}
+  New-Item -Force -ItemType Directory $env:TEMP\open-tag | Out-Null; Invoke-WebRequest -Uri {origin}/daemon/cli.mjs -OutFile $env:TEMP\open-tag\cli.mjs; Invoke-WebRequest -Uri {origin}/daemon/agent-cli.mjs -OutFile $env:TEMP\open-tag\agent-cli.mjs; node "$env:TEMP\open-tag\cli.mjs" --server-url {origin} --api-key {key}
   ```
+- server 端点：`GET /daemon/cli.mjs` + `GET /daemon/agent-cli.mjs`；`daemonBundleAvailable` = 两文件都在。
 - 端点公开无鉴权（bundle 无密钥，信任级别同 npm 公开包），`Cache-Control: no-cache`。
 - 目标机器仍需 node20+（与 npx 相同前提）。
+- 已落地（landed: commit 76bbd06）：server 双端点 + `daemonBundleExists` 双文件语义 + web 两件套下载命令；17/17 单测绿、typecheck 绿。
 
 ---
 
