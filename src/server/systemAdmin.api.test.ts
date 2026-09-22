@@ -10,6 +10,7 @@ import { createServer as createNetServer } from "node:net";
 import { and, eq } from "drizzle-orm";
 import { db, schema, sql } from "../db/index.js";
 import { hashPassword, signUser } from "./auth.js";
+import { promoteSystemAdminsFromEnv } from "./systemSettings.js";
 
 let serverProcess: ChildProcess | null = null;
 let base = "";
@@ -288,4 +289,19 @@ test("admin servers/stats/audit: list counts, delete cascades, gate-2 rejection,
   // pagination: non-paged list has user.login events
   const all: any = await (await api("/api/admin/audit-logs?limit=200", { headers: hdr })).json();
   assert.ok(all.logs.some((l: any) => l.event === "user.login"));
+});
+
+test("SYSTEM_ADMIN_EMAILS promotion: idempotent, promote-only", async () => {
+  const u = await insertUser({ email: `envp-${suffix}@t.local`, name: `envp${suffix}`, password: "password-1" });
+  process.env.SYSTEM_ADMIN_EMAILS = u.email;
+  try {
+    await promoteSystemAdminsFromEnv();
+    await promoteSystemAdminsFromEnv(); // twice — idempotent
+    const row = (await db.select().from(schema.users).where(eq(schema.users.id, u.id)))[0]!;
+    assert.equal(row.systemRole, "system_admin");
+    delete process.env.SYSTEM_ADMIN_EMAILS;
+    await promoteSystemAdminsFromEnv();
+    const row2 = (await db.select().from(schema.users).where(eq(schema.users.id, u.id)))[0]!;
+    assert.equal(row2.systemRole, "system_admin"); // promote-only: clearing env must not demote
+  } finally { delete process.env.SYSTEM_ADMIN_EMAILS; }
 });
