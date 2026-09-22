@@ -94,6 +94,19 @@ System-admin surface (all gate 1.5, all audit-logged):
   joins the target workspace with the granted role, auto-joins `#all`, and signs the user in. Any
   non-usable token (never existed / revoked / expired / used) → `410 invite_<status>`; duplicate
   pending invite per email → 409.
+- **Workspaces** — `GET /api/admin/servers` (per-server member/agent counts + owner name),
+  `DELETE /api/admin/servers/:id` (hard-cascade: one tx clears every server-scoped table
+  children-first; members of the deleted workspace lose gate-2 access immediately — a still-valid
+  JWT now gets `403 not a member of this server`; daemon/agent processes are not killed, their auth
+  fails naturally once the server row is gone). Non-uuid or unknown id → 404. Audit-logged as
+  `server.deleted` (the id lives in metadata — `audit_logs.targetServerId` cannot reference a
+  deleted row, and pre-existing audit rows referencing the workspace have their `targetServerId`
+  nulled, keeping the append-only history).
+- **Stats** — `GET /api/admin/stats` (users total/disabled/systemAdmins, servers, agents
+  total/active, machines total/online). Read-only, counts only.
+- **Audit logs** — `GET /api/admin/audit-logs` (`event` exact filter, `before` = createdAt-ISO
+  cursor, newest-first, limit clamped 1-200). Read-only; the audit trail itself is append-only —
+  the only mutation anywhere is the server-delete nulling described above.
 - Unmatched `/api/admin/*` path (guard passed) → 404 inside the handler, never the gate-2
   `x-server-id` 400.
 
