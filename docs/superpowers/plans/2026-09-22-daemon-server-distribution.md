@@ -222,17 +222,17 @@ export function daemonUpdateCommands(origin: string, opts: { template?: string |
 
 ### Task 6: 端到端验证（verification-before-completion）
 
-- [ ] Step 1: 单测全绿：
+- [x] Step 1: 单测全绿：
   `npx tsx --test --test-force-exit test/daemonBundle.unit.test.ts test/daemonConnectCommand.unit.test.ts test/machineUpdateGuide.unit.test.ts`
-- [ ] Step 2: `npm run typecheck`（root + web）
-- [ ] Step 3: 活栈验证（worktree 内）：
+- [x] Step 2: `npm run typecheck`（root + web）
+- [x] Step 3: 活栈验证（worktree 内）：
   1. `npm run pkg:daemon:build`
   2. 起 server（现有 dev DB 即可）
   3. `curl -fsS -D - -o /dev/null http://localhost:$PORT/daemon/cli.mjs` → 200 + text/javascript；`curl -fsS …/daemon/cli.mjs | head -c 100` 首字节 `#!/usr/bin/env node`；`curl -fsSI`（HEAD）→ 200 空 body
   4. bundle 删除后再 curl → 404 JSON（回退路径成立）
   5. 浏览器（chrome-devtools MCP，`--isolated`）：`/s/<slug>/computer` 重连/添加向导显示双 tab，默认 tab 随平台；复制 bash 命令在本机实际执行 → daemon 上线（`.shots/` 截图，gitignored）
-- [ ] Step 4: 开发日志 `.agents/notes/2026-09-22-daemon-server-dist.md`
-- [ ] Step 5: PR from worktree branch
+- [x] Step 4: 开发日志 `.agents/notes/2026-09-22-daemon-server-dist.md`
+- [x] Step 5: PR from worktree branch
 
 ## 边界与不做（YAGNI）
 
