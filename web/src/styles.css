@@ -1183,6 +1183,7 @@ aside.traj-col.profile-mode .scroll{flex:1;min-height:0;overflow:auto;margin:0 -
   .adm-side { width: 100%; flex-direction: row; align-items: center; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--hair); padding: 8px 12px; }
   .adm-side .logo, .adm-sec, .adm-side .foot { display: none; }
   .adm-side a { margin: 0 2px 0 0; white-space: nowrap; }
+  .adm-side nav { display: flex; flex-direction: row; gap: 2px; overflow-x: auto; } /* nav 本身是 block——不转 row，链接仍纵向堆叠 */
   .adm-main { padding: 14px; }
   .adm-head { flex-wrap: wrap; }
   .adm-input { min-width: 0; }
