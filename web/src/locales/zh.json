@@ -577,8 +577,9 @@
   },
   "admin": {
     "title": "系统管理",
-    "subtitle": "部署级管理控制台",
     "entry": "系统管理",
+    "navGroup": "管理",
+    "backToWorkspace": "返回工作区",
     "tab": {
       "users": "用户",
       "invites": "邀请",
@@ -586,8 +587,23 @@
       "audit": "审计日志",
       "settings": "设置"
     },
+    "stats": {
+      "totalUsers": "用户总数",
+      "disabledUsers": "已禁用"
+    },
+    "menu": {
+      "disableUser": "禁用用户",
+      "enableUser": "启用用户",
+      "promote": "设为系统管理员",
+      "demote": "撤销系统管理员",
+      "resetPassword": "重置密码",
+      "copyLink": "复制链接",
+      "revokeInvite": "撤销邀请",
+      "deleteWorkspace": "删除 Workspace"
+    },
     "users": {
       "search": "搜索邮箱/用户名（回车）",
+      "inviteCta": "＋ 邀请用户",
       "email": "邮箱",
       "role": "系统角色",
       "status": "状态",
@@ -596,8 +612,6 @@
       "sysAdmin": "系统管理员",
       "active": "正常",
       "disabled": "已禁用",
-      "enable": "启用",
-      "disable": "禁用",
       "promote": "设为管理员",
       "promoteConfirm": "将 {{email}} 设为系统管理员？",
       "promoteMessage": "系统管理员可管理全部用户、邀请、Workspace 与部署设置。",
@@ -624,19 +638,18 @@
     },
     "invites": {
       "email": "受邀人邮箱",
+      "createCta": "＋ 生成邀请",
+      "workspace": "Workspace",
+      "role": "角色",
       "pickWorkspace": "选择 Workspace…",
       "roleMember": "成员 (member)",
       "roleAdmin": "管理员 (admin)",
       "expires": "有效期（天，1-90）",
       "create": "生成邀请",
       "creating": "生成中…",
-      "createdTitle": "邀请已创建",
-      "createdNote": "把链接发给受邀人——对方打开设置用户名和密码后即加入目标 Workspace。链接在到期或被接受前有效。",
-      "linkLabel": "邀请链接",
       "copy": "复制",
       "copied": "已复制",
       "listEmpty": "还没有邀请。",
-      "createdAt": "创建于",
       "expiresAt": "到期",
       "status": {
         "pending": "待接受",
@@ -648,7 +661,6 @@
       "revokeMessage": "该邀请链接立即失效。"
     },
     "workspaces": {
-      "statsUsers": "用户",
       "statsServers": "Workspaces",
       "statsAgents": "Agents（活跃/总数）",
       "statsMachines": "机器（在线/总数）",

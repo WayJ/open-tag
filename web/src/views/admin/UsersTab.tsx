@@ -1,16 +1,26 @@
-// Users tab of the system-admin console: deployment-wide user list (GET /api/admin/users?q=) with
-// disable/enable, sysadmin promote/demote (PATCH), and password reset (POST → temp password shown
-// ONCE in a modal). Self-guards live server-side ("cannot disable yourself" 400) and surface here.
+// Users tab of the system-admin console: KPI stat cards (GET /api/admin/stats) over the
+// deployment-wide user list (GET /api/admin/users?q=) with disable/enable, sysadmin promote/demote
+// (PATCH), and password reset (POST → temp password shown ONCE in a modal). Row actions live in a
+// ⋯ kebab menu (RowMenu). Self-guards live server-side ("cannot disable yourself" 400) and surface
+// in the form-err line under the head.
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useConfirm, useEscClose } from "../../ConfirmModal.tsx";
 import { copyText } from "../../lib/clipboard.ts";
+import { AdmPill } from "./AdmPill.tsx";
+import { StatCard } from "./StatCard.tsx";
+import { AdminTable } from "./AdminTable.tsx";
+import { RowMenu } from "./RowMenu.tsx";
+import { avatarTone, avatarInitial } from "./avatar.ts";
 import type { AdminApi } from "../Admin.tsx";
 
 export function UsersTab({ api }: { api: AdminApi }) {
   const { t } = useTranslation();
+  const nav = useNavigate();
   const confirm = useConfirm();
   const [q, setQ] = useState("");
+  const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -23,6 +33,10 @@ export function UsersTab({ api }: { api: AdminApi }) {
     setUsers(r?.users ?? []);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => {
+    (async () => { const r = await api("GET", "/api/admin/stats"); if (!r?.error) setStats(r); })(); // KPI cards; on failure they just stay hidden
+    /* eslint-disable-next-line */
+  }, []);
   const patch = async (id: string, body: unknown) => {
     setBusy(true); setErr("");
     try {
@@ -54,30 +68,47 @@ export function UsersTab({ api }: { api: AdminApi }) {
   };
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input placeholder={t("admin.users.search")} value={q} onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && load()} style={{ flex: 1, maxWidth: 320 }} />
+      <div className="adm-head">
+        <h1>{t("admin.tab.users")}</h1>
+        <div className="acts">
+          <input className="adm-input" aria-label={t("admin.users.search")} placeholder={t("admin.users.search")} value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && load()} />
+          <button className="adm-btn-primary" onClick={() => nav("/admin/invites")}>{t("admin.users.inviteCta")}</button>
+        </div>
       </div>
       {err && <div className="form-err" style={{ marginBottom: 12 }}>{err}</div>}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr style={{ textAlign: "left", borderBottom: "1px solid var(--hair-strong)" }}>
-          <th style={{ padding: "6px 8px" }}>{t("admin.users.email")}</th><th style={{ padding: "6px 8px" }}>{t("admin.users.role")}</th><th style={{ padding: "6px 8px" }}>{t("admin.users.status")}</th><th style={{ padding: "6px 8px" }}>{t("admin.users.workspaces")}</th><th style={{ padding: "6px 8px" }}>{t("admin.users.created")}</th><th></th>
-        </tr></thead>
-        <tbody>{users.map((u) => (
-          <tr key={u.id} style={{ borderBottom: "1px solid var(--hair)" }}>
-            <td style={{ padding: "6px 8px" }}>{u.email}</td>
-            <td style={{ padding: "6px 8px" }}>{u.systemRole === "system_admin" ? t("admin.users.sysAdmin") : "—"}</td>
-            <td style={{ padding: "6px 8px" }}>{u.disabledAt ? t("admin.users.disabled") : t("admin.users.active")}</td>
-            <td style={{ padding: "6px 8px" }}>{u.workspaceCount}</td>
-            <td style={{ padding: "6px 8px" }}>{new Date(u.createdAt).toLocaleDateString()}</td>
-            <td style={{ whiteSpace: "nowrap", padding: "6px 8px", textAlign: "right" }}>
-              <button className="action-btn" disabled={busy} onClick={() => patch(u.id, { disabled: !u.disabledAt })}>{u.disabledAt ? t("admin.users.enable") : t("admin.users.disable")}</button>{" "}
-              <button className="action-btn" disabled={busy} onClick={() => patchRole(u)}>{u.systemRole ? t("admin.users.demote") : t("admin.users.promote")}</button>{" "}
-              <button className="action-btn" disabled={busy} onClick={() => resetPw(u)}>{t("admin.users.resetBtn")}</button>
+      {stats && (
+        <div className="adm-stats">
+          <StatCard label={t("admin.stats.totalUsers")} value={stats.users.total} />
+          <StatCard label={t("admin.stats.disabledUsers")} value={stats.users.disabled} />
+          <StatCard label={t("admin.users.sysAdmin")} value={stats.users.systemAdmins} />
+          <StatCard label={t("admin.workspaces.statsServers")} value={stats.servers} />
+        </div>
+      )}
+      <AdminTable
+        cols={[t("admin.users.email"), t("admin.users.role"), t("admin.users.status"), t("admin.users.workspaces"), t("admin.users.created"), { label: "", right: true }]}
+        empty={!err ? t("admin.users.empty") : undefined}
+      >
+        {users.map((u) => (
+          <tr key={u.id}>
+            <td>
+              <span className={"adm-av " + avatarTone(u.email)}>{avatarInitial(u.email)}</span>
+              <span className="adm-email">{u.email}</span>
             </td>
-          </tr>))}</tbody>
-      </table>
-      {users.length === 0 && !err && <div className="empty">{t("admin.users.empty")}</div>}
+            <td>{u.systemRole === "system_admin" ? <AdmPill tone="blue">{t("admin.users.sysAdmin")}</AdmPill> : "—"}</td>
+            <td>{u.disabledAt ? <AdmPill tone="red">{t("admin.users.disabled")}</AdmPill> : <AdmPill tone="green">{t("admin.users.active")}</AdmPill>}</td>
+            <td>{u.workspaceCount}</td>
+            <td>{new Date(u.createdAt).toLocaleDateString()}</td>
+            <td style={{ textAlign: "right" }}>
+              <RowMenu ariaLabel={u.email} disabled={busy} items={[
+                { label: u.disabledAt ? t("admin.menu.enableUser") : t("admin.menu.disableUser"), onClick: () => patch(u.id, { disabled: !u.disabledAt }) },
+                { label: u.systemRole ? t("admin.menu.demote") : t("admin.menu.promote"), sep: true, onClick: () => patchRole(u) },
+                { label: t("admin.menu.resetPassword"), onClick: () => resetPw(u) },
+              ]} />
+            </td>
+          </tr>
+        ))}
+      </AdminTable>
       {tempPw && <TempPasswordModal email={tempPw.email} pw={tempPw.pw} copied={copied} onCopy={copyPw} onClose={() => setTempPw(null)} />}
     </div>
   );
@@ -89,7 +120,7 @@ function TempPasswordModal({ email, pw, copied, onCopy, onClose }: { email: stri
   const { t } = useTranslation();
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal adm-modal" onClick={(e) => e.stopPropagation()}>
         <h3>{t("admin.users.tempPwTitle", { email })}</h3>
         <p><code>{pw}</code></p>
         <p className="modal-note">{t("admin.users.tempPwNote")}</p>

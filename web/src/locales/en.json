@@ -577,8 +577,9 @@
   },
   "admin": {
     "title": "System admin",
-    "subtitle": "Deployment-level admin console",
     "entry": "System admin",
+    "navGroup": "System",
+    "backToWorkspace": "Back to workspace",
     "tab": {
       "users": "Users",
       "invites": "Invites",
@@ -586,8 +587,23 @@
       "audit": "Audit log",
       "settings": "Settings"
     },
+    "stats": {
+      "totalUsers": "Total users",
+      "disabledUsers": "Disabled"
+    },
+    "menu": {
+      "disableUser": "Disable user",
+      "enableUser": "Enable user",
+      "promote": "Grant sysadmin",
+      "demote": "Revoke sysadmin",
+      "resetPassword": "Reset password",
+      "copyLink": "Copy link",
+      "revokeInvite": "Revoke invite",
+      "deleteWorkspace": "Delete workspace"
+    },
     "users": {
       "search": "Search email/username (Enter)",
+      "inviteCta": "＋ Invite user",
       "email": "Email",
       "role": "System role",
       "status": "Status",
@@ -596,8 +612,6 @@
       "sysAdmin": "System admin",
       "active": "Active",
       "disabled": "Disabled",
-      "enable": "Enable",
-      "disable": "Disable",
       "promote": "Make admin",
       "promoteConfirm": "Make {{email}} a system admin?",
       "promoteMessage": "System admins manage every user, invite, workspace, and deployment setting.",
@@ -624,19 +638,18 @@
     },
     "invites": {
       "email": "Invitee email",
+      "createCta": "＋ New invite",
+      "workspace": "Workspace",
+      "role": "Role",
       "pickWorkspace": "Pick a workspace…",
       "roleMember": "Member",
       "roleAdmin": "Admin",
       "expires": "Expires (days, 1-90)",
       "create": "Create invite",
       "creating": "Creating…",
-      "createdTitle": "Invite created",
-      "createdNote": "Send the link to the invitee — they open it, set a username and password, and land in the target workspace. The link works until it expires or is accepted.",
-      "linkLabel": "Invite link",
       "copy": "Copy",
       "copied": "Copied",
       "listEmpty": "No invites yet.",
-      "createdAt": "created",
       "expiresAt": "expires",
       "status": {
         "pending": "pending",
@@ -648,7 +661,6 @@
       "revokeMessage": "The invite link stops working immediately."
     },
     "workspaces": {
-      "statsUsers": "Users",
       "statsServers": "Workspaces",
       "statsAgents": "Agents (active/total)",
       "statsMachines": "Machines (online/total)",
